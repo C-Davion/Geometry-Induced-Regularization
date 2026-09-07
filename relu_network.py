@@ -1,3 +1,10 @@
+'''
+File to create the 1 layer relu network for the experiments
+Comes with built in method to compute the activation patterns, and the jacobiant of θ->f(θ,X) for fixed X
+Also creates the different feature transformations.
+'''
+
+
 import torch
 import torch.nn as nn
 from torch.func import functional_call, jacrev

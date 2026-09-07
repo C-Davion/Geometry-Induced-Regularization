@@ -1,5 +1,9 @@
+'''
+Reads a .pt file containing the model weights of the class OneHiddenLayerReLUNEt, requires knowledge of which rho was used
+Such file are generated with the training file train.py
+After reading the .pt file, instantied the network and plots the output for a given x in range in R.
 
-# plot_trained_network.py
+'''
 
 import torch
 import matplotlib.pyplot as plt
@@ -23,7 +27,7 @@ X_MIN = -3.0
 X_MAX = 3.0
 N_POINTS = 300
 input_dim=1
-showbreakline=False
+showbreakline=False #vertical lines between  activation pattern
 
 # ------------------------------------------------------------
 # Load trained weights

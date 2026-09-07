@@ -1,3 +1,12 @@
+'''
+Use to generate the teacher function (true Y), of the form max(min Ax, A1x, min Bx, B1x) after x has been augmented by rho.
+Samples values of A, A1, B, B1 at random, then purges those that have either
+-small amount of pieces in the X range
+-small total variation
+Then the user hand select the final few.
+Parameters A,A1, B,B1 are saved in LOG_File
+'''
+
 import numpy as np
 import matplotlib.pyplot as plt
 import json
