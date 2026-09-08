@@ -2,6 +2,7 @@
 Reads a .pt file containing the model weights of the class OneHiddenLayerReLUNEt, requires knowledge of which rho was used
 Such file are generated with the training file train.py
 After reading the .pt file, instantied the network and plots the output for a given x in range in R.
+Piece with different activation pattern are colored differently.
 
 '''
 
