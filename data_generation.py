@@ -59,9 +59,10 @@ def train_val_split(X, Y, ratio=0.2, shuffle=True, random_seed=42):
     n_samples = X.shape[0]
     n_val = int(n_samples * ratio)
     if shuffle:
-        torch.manual_seed(random_seed)
-        indices = torch.randperm(n_samples)
+        g = torch.Generator()
+        g.manual_seed(random_seed)          # fixed seed, kept — split stays reproducible
+        indices = torch.randperm(n_samples, generator=g)   # local generator, no global side effect
         X, Y = X[indices], Y[indices]
     train_X, val_X = X[n_val:], X[:n_val]
-    train_Y, val_Y = Y[n_val:], Y[:n_val]     # ← Y, not X
+    train_Y, val_Y = Y[n_val:], Y[:n_val]
     return train_X, val_X, train_Y, val_Y

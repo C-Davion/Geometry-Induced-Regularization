@@ -204,3 +204,21 @@ class Muon(torch.optim.Optimizer):
                 g = g * max(g.size(0), g.size(1)) ** 0.5   # scale to match typical update size
 
                 p.add_(g, alpha=-lr)
+def maybe_warm_restart(opt_muon, scheduler_weight, opt_bias, scheduler_bias,
+                        total_epochs, epoch_reached, last_restart_epoch,
+                        patience_for_restart=5000, restart_factor=0.1):
+    epochs_since_improvement = total_epochs - epoch_reached
+    epochs_since_restart = total_epochs - last_restart_epoch
+
+    if epochs_since_improvement > patience_for_restart and epochs_since_restart > patience_for_restart:
+        for g in opt_muon.param_groups:
+            g['lr'] = opt_muon.defaults['lr'] * restart_factor
+        for g in opt_bias.param_groups:
+            g['lr'] = opt_bias.defaults['lr'] * restart_factor   # reset from its OWN base, not multiply current
+
+        scheduler_weight.cooldown_counter = 0
+        scheduler_weight.num_bad_epochs = 0
+        scheduler_bias.cooldown_counter = 0
+        scheduler_bias.num_bad_epochs = 0
+        return True, total_epochs
+    return False, last_restart_epoch
