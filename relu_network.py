@@ -125,8 +125,15 @@ class OneHiddenLayerReLUNet(nn.Module):
         """
         Pre-activation values of the hidden layer: W1 @ rho(x) + b1.
         Shape: (..., hidden_dim).
+        Reshape to (batch,-1) if feature dim has multiple axis
+        Raise error when self._features returns something with 1 axis
         """
-        return self._features(x) @ self.W1.T + self.b1
+        features=self._features(x)
+        if features.dim()>2:
+            features=torch.reshape(features,(features.shape[0],-1))
+        else:
+            raise RuntimeError("Expected something of size (batch, feature dim), got something a tensor of 1 axis.")
+        return features@ self.W1.T + self.b1
 
     # ------------------------------------------------------------------
     # Forward pass
@@ -260,6 +267,127 @@ class LinearFeatureMap(nn.Module):
         return x @ self.A.T + self.c
 
 
+class LinearFeatureAttention(nn.Module):
+    """
+
+        x: (batch,)
+        output: (batch, seq_len, embed_dim)
+
+    Trainable parameters:
+        E       : (seq_len,embded_dim)
+        B       : (seq_len,embded_dim)
+        attention parameters
+    """
+
+    def __init__(self,seq_len: int = 8,embed_dim: int = 32,init_scale=3.0) -> None:
+        super().__init__()
+        self.seq_len = seq_len
+        self.embed_dim = embed_dim
+        self.output_dim=seq_len*embed_dim
+        self.init_scale=init_scale
+        # --------------------------------------------------
+        # Feature-specific embeddings
+        #
+        # E_i ∈ R^embed_dim for each of the 8 features
+        # E ∈ R^(seq_len × embed_dim)
+        # --------------------------------------------------
+        self.E = nn.Parameter(torch.randn(seq_len, embed_dim) * self.init_scale)
+        # --------------------------------------------------
+        # Feature-specific bias
+        #
+        # B ∈ R^(seq_len × 32)
+        # --------------------------------------------------
+        self.B = nn.Parameter(torch.zeros(seq_len, embed_dim))
+
+        # --------------------------------------------------
+        # Single-head self-attention
+        #
+        # All projection matrices/biases inside this module
+        # are trainable by default.
+        # --------------------------------------------------
+        self.attention = nn.MultiheadAttention(embed_dim=embed_dim,num_heads=1,batch_first=True,)
+
+    def forward(self,x: torch.Tensor,) -> torch.Tensor:
+
+        # ----------------------------------------------
+        # Accept:
+        #   (batch,)
+        # or
+        #   (batch, 1)
+        # ----------------------------------------------
+        if x.dim() == 1:
+            x = x.unsqueeze(-1)
+
+        if x.dim() != 2 or x.shape[-1] != 1:
+            raise ValueError(
+                f"Expected x to have shape (batch,) or (batch, 1), "
+                f"got {tuple(x.shape)}"
+            )
+
+
+        # ----------------------------------------------
+        z = x @ torch.ones(self.seq_len,dtype=x.dtype).unsqueeze(-1).T.to(x.device)
+        #z=[x,x,x,x,x,x,]
+        # ----------------------------------------------
+        # Turn the 8 scalar features into 8 tokens.
+        #
+        # z.unsqueeze(-1):
+        #       (batch, seq_len, 1)
+        #
+        # E:
+        #       (seq_len, embed_dim)
+        #
+        # Broadcasting gives:
+        #       (batch, seq_len, embed_dim)
+        #
+        # H[b, i, :] = z[b, i] * E[i, :] + B[i, :]
+        # ----------------------------------------------
+        H = z.unsqueeze(-1) * self.E + self.B
+
+        # ----------------------------------------------
+        # Self-attention across the  seq_len tokens.
+        #
+        # H:
+        #       (batch, seq_len, embed_dim)
+        #
+        # Attention operates over dimension 8.
+        # ----------------------------------------------
+        H_att, attention_weights = self.attention(H,H,H,)
+
+        # H_att:(batch, 8, 32)
+        return H_att
+    def get_parameters(self):
+        """
+        Return all trainable parameters as a Python dictionary.
+
+        The returned object contains only Python lists/floats,
+        so it is directly JSON serializable.
+        """
+
+        return {
+            "E": self.E.detach().cpu().tolist(),
+            "B": self.B.detach().cpu().tolist(),
+
+            "attention": {
+                "in_proj_weight":self.attention.in_proj_weight.detach().cpu().tolist(),
+
+                "in_proj_bias":self.attention.in_proj_bias.detach().cpu().tolist(),
+
+                "out_proj_weight":self.attention.out_proj.weight.detach().cpu().tolist(),
+
+                "out_proj_bias":self.attention.out_proj.bias.detach().cpu().tolist(),
+            },
+        }
+    def get_parameter_count(self):
+        """
+        Return the total number of trainable parameters.
+        """
+        return sum(
+            p.numel()
+            for p in self.parameters()
+            if p.requires_grad
+        )
+    formula="x->z=[x,x,x,x,...]>H_i=z_iE_i+b_i->single head self Attention"
 class PolynomialFeatureMap(nn.Module):
     """
     Fixed (non-trainable) degree-2 polynomial feature map.
@@ -282,6 +410,8 @@ class QuadraticFeatureMap(nn.Module):
     def forward(self, x):
         return torch.cat([x, x**2], dim=-1)     # (N, 2) — no constant column
     formula="x->[x,x**2]"
+
+
 
 
 # ── Smoke-test ────────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 import glob
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 from datetime import datetime
 import torch
 import torch.nn as nn
@@ -24,11 +24,20 @@ def _jsonify_param(value):
 
 # ── Structural-quantity helpers (batch versions) ────────────────────────────
 
-def stacked_jacobian_rank(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> int:
+
+def stable_rank(M: torch.Tensor) -> float:
     """
-    Rank of the Jacobian of θ -> [f(θ,x1); ...; f(θ,xN)] w.r.t. all
-    parameters θ, evaluated at the current weights, over the full batch X.
+    Stable rank  ||M||_F^2 / ||M||_2^2 = sum_i sigma_i^2 / sigma_max^2.
+    Real-valued, in [1, rank(M)] (0 for the zero matrix), needs no tolerance.
     """
+    s = torch.linalg.svdvals(M)
+    if s.numel() == 0 or s[0] == 0:
+        return 0.0
+    return float((s ** 2).sum() / s[0] ** 2)
+
+
+def stacked_jacobian(net, X: torch.Tensor) -> torch.Tensor:
+    """Jacobian of θ -> [f(θ,x1); ...; f(θ,xN)] w.r.t. all parameters, shape (N*output_dim, P)."""
     params = dict(net.named_parameters())
 
     def f_batch(p: dict) -> torch.Tensor:
@@ -36,15 +45,25 @@ def stacked_jacobian_rank(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> int:
         return out.flatten()               # (N*output_dim,)
 
     jac_dict = jacrev(f_batch)(params)
-    J = torch.cat([j.flatten(start_dim=1) for j in jac_dict.values()], dim=1)
-    return int(torch.linalg.matrix_rank(J))
+    return torch.cat([j.flatten(start_dim=1) for j in jac_dict.values()], dim=1)
 
 
-def pattern_stats(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> Tuple[int, int]:
+def stacked_jacobian_rank(net, X: torch.Tensor, rtol=None,
+                          stable: bool = False) -> Union[int, float]:
+    """rtol=None -> torch's default max(m,n)*eps(dtype). stable=True -> stable rank (float)."""
+    J = stacked_jacobian(net, X)
+    if stable:
+        return stable_rank(J)
+    return int(torch.linalg.matrix_rank(J, rtol=rtol))
+
+
+def pattern_stats(net, X: torch.Tensor, rtol=None,
+                  stable: bool = False) -> Tuple[Union[int, float], int]:
     """Return (rank of pattern matrix, number of distinct pattern rows)."""
     with torch.no_grad():
         pat = net.activation_pattern(X)          # (N, hidden_dim)
-    rank = int(torch.linalg.matrix_rank(pat.float()))
+    P = pat.to(X.dtype)                          # was .float(); identical for float32 X
+    rank = stable_rank(P) if stable else int(torch.linalg.matrix_rank(P, rtol=rtol))
     n_distinct = len(set(tuple(row.tolist()) for row in pat))
     return rank, n_distinct
 def adam_step_norm(optimizer):
@@ -158,6 +177,43 @@ def iter_target_functions(jsonl_path):
 
             yield obj["score"], target_params
             break #do just one
+def iter_target_functions_attention(jsonl_path):
+    """
+    Iterate over a JSONL file whose lines have the form
+ 
+    {
+        "score": ...,
+        "rho": {...},   # LinearFeatureAttention weights, see build_rho()
+        "A": [...],
+        "A1": [...],
+        "B": [...],
+        "B1": [...]
+    }
+ 
+    Yields (score, target_params) pairs, where target_params is a dict with
+    keys "A", "A1", "B", "B1", "rho" — matching make_target_fn's parameter
+    names exactly, so it can be unpacked straight into it:
+ 
+        for score, target_params in iter_target_functions(path):
+            target_fn = make_target_fn(**target_params)
+    """
+    with open(jsonl_path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+ 
+            obj = json.loads(line)
+ 
+            target_params = {
+                "A": torch.tensor(obj["A"], dtype=torch.float32).reshape(-1, 1),
+                "A1": torch.tensor(obj["A1"], dtype=torch.float32).reshape(-1, 1),
+                "B": torch.tensor(obj["B"], dtype=torch.float32).reshape(-1, 1),
+                "B1": torch.tensor(obj["B1"], dtype=torch.float32).reshape(-1, 1),
+                "rho": build_rho(obj["rho"]),
+            }
+ 
+            yield obj["score"], target_params
+            break  # do just one
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     """Orthogonalize a 2D matrix's update via a quintic Newton-Schulz iteration."""
     assert G.ndim == 2
