@@ -1,0 +1,13 @@
+pipeline for 2D input
+
+0: Reconfigure a testdir2D on the server. Add scipy and pandas and sklearn (or something similar, check if it can be done via pip) 
+
+1: Check if linear attention 2D needs to be written (maybe a inheritance of the class)
+
+2: Use the plot teacher function and find a couple of good teacher function. Save weights to intresting_function2D.json. Check for x,y range to get 
+
+3: Use that to create the dataset:  X,Y as random points on the grid  within [-1,1]^2? and Z. SAVE EVERYTHING to a file. Split into train_val HERE.
+
+4 : Rewrite the training file. The plot should contain both the output function and the scatter of the dataset, with the pattern.
+
+5: Rewrite all the experiments files that does the same things as 1D. ADD all filtering args from the start, and create 1 single load_run functions.
