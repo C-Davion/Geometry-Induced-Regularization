@@ -132,6 +132,7 @@ def make_target_fn_attention(A: torch.Tensor, A1: torch.Tensor,
     def target_fn(x: torch.Tensor) -> torch.Tensor:
         # x: (N, 1)
         with torch.no_grad():
+            print(type(rho))
             X = rho(x)                              # (N, seq_len, embed_dim)
             X = torch.reshape(X, (X.shape[0], -1))   # (N, seq_len*embed_dim)
             y = torch.maximum(
