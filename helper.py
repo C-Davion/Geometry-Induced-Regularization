@@ -278,3 +278,25 @@ def maybe_warm_restart(opt_muon, scheduler_weight, opt_bias, scheduler_bias,
         scheduler_bias.num_bad_epochs = 0
         return True, total_epochs
     return False, last_restart_epoch
+
+
+def load_dataset(dataset_path):
+    """
+    Load a saved .pt dataset.
+
+    Returns:
+        X_train, Y_train, X_val, Y_val
+    """
+    data = torch.load(
+        dataset_path,
+        map_location="cpu",
+        weights_only=True
+    )
+
+    X_train = data["X_train"]
+    Y_train = data["Y_train"]
+    X_val = data["X_val"]
+    Y_val = data["Y_val"]
+    
+
+    return (X_train, Y_train, X_val, Y_val),data
