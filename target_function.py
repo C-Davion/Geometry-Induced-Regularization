@@ -14,6 +14,7 @@ plot special-cases input_dim == output_dim == 1.
 
 import torch
 import matplotlib.pyplot as plt
+from relu_network import LinearFeatureAttention
 
 def target_fn1(x: torch.Tensor) -> torch.Tensor:
     """

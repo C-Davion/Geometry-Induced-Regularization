@@ -209,7 +209,7 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN, rank_me
 # Training inputs
 # ============================================================
 
-def load_training_inputs(config):
+def load_training_inputs(config,return_Y=False):
     """
     Rebuild the run's TRAINING inputs X_train exactly as in the training
     script: target function from config, generate_dataset (deterministic,
@@ -226,8 +226,11 @@ def load_training_inputs(config):
         seed=config.get("seed", None),
         is_random=True,
     )
-    X_train, _, _, _ = train_val_split(X, Y)
-    return X_train
+    X_train, X_val, Y_train, Y_val = train_val_split(X, Y)
+    if return_Y:
+        return X_train,Y_train
+    else:
+        return X_train
 
 # ============================================================
 # lower: rank of the (deduplicated, restricted) activation-pattern matrix
@@ -400,7 +403,6 @@ def compute_rank_ratio_table(base_dirs=BASE_DIRS, folder_pattern=FOLDER_PATTERN,
             model, X_train, device=device, lower_mode=lower_mode, method=rank_method, w2_tol=w2_tol,
         )
 
-        random_sampling=True
         pattern_count = p_rank if upper_mode == "p_rank" else n_patterns
         upper = compute_upper(output_dim, seq_len, embed_dim, pattern_count, model.rho,upper_mode,X_train)
         if not random_sampling:

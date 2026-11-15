@@ -388,6 +388,88 @@ class LinearFeatureAttention(nn.Module):
             if p.requires_grad
         )
     formula="x->z=[x,x,x,x,...]>H_i=z_iE_i+b_i->single head self Attention"
+
+class LinearFeatureAttention2D(nn.Module):
+    def __init__(self, seq_len=8, embed_dim=32, input_dim=2, init_scale=3.0, scheme="mixed"):
+        super().__init__()
+        self.seq_len, self.embed_dim, self.input_dim = seq_len, embed_dim, input_dim
+        self.output_dim = seq_len * embed_dim
+
+        self.E = nn.Parameter(torch.randn(seq_len, input_dim, embed_dim) * init_scale)  # E_s ∈ R^{d_in × D}
+        self.B = nn.Parameter(torch.zeros(seq_len, embed_dim))
+        self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=1, batch_first=True)
+
+        # which token sees which coordinate
+        mask = torch.ones(seq_len, input_dim, 1)
+        if scheme == "separate":
+            s = torch.arange(seq_len)
+            mask.zero_()
+            mask[s, (s * input_dim) // seq_len] = 1.0      # S=8, d_in=2: tokens 0-3 -> x, 4-7 -> y
+        elif scheme != "mixed":
+            raise ValueError(f"scheme must be 'mixed' or 'separate', got {scheme!r}")
+        self.register_buffer("mask", mask, persistent=False)   # not in state_dict: rebuilt from (S, d_in, scheme)
+
+    def forward(self, u):
+        if u.dim() == 1:                                   # (batch,) only valid when input_dim == 1
+            u = u.unsqueeze(-1)
+        if u.dim() != 2 or u.shape[-1] != self.input_dim:
+            raise ValueError(f"Expected u of shape (batch, {self.input_dim}), got {tuple(u.shape)}")
+
+        H = torch.einsum("bi,sid->bsd", u, self.E * self.mask) + self.B   # (batch, S, D)
+        H_att, _ = self.attention(H, H, H)
+        return H_att
+    def get_parameters(self):
+            """
+            Return all trainable parameters as a Python dictionary.
+    
+            The returned object contains only Python lists/floats,
+            so it is directly JSON serializable.
+            """
+    
+            return {
+                "E": self.E.detach().cpu().tolist(),
+                "B": self.B.detach().cpu().tolist(),
+    
+                "attention": {
+                    "in_proj_weight":self.attention.in_proj_weight.detach().cpu().tolist(),
+    
+                    "in_proj_bias":self.attention.in_proj_bias.detach().cpu().tolist(),
+    
+                    "out_proj_weight":self.attention.out_proj.weight.detach().cpu().tolist(),
+    
+                    "out_proj_bias":self.attention.out_proj.bias.detach().cpu().tolist(),
+                },
+            }
+    def get_parameter_count(self):
+        """
+        Return the total number of trainable parameters.
+        """
+        return sum(
+            p.numel()
+            for p in self.parameters()
+            if p.requires_grad
+        )
+    @classmethod
+    def from_parameters(cls, params: dict) -> "LinearFeatureAttention":
+        """Rebuild a module from the dictionary returned by get_parameters()."""
+        E = torch.tensor(params["E"], dtype=torch.float32)
+        seq_len, input_dim, embed_dim = E.shape
+        rho = cls(seq_len=seq_len, embed_dim=embed_dim, input_dim=input_dim,
+                  scheme=params.get("scheme", "mixed"))
+        att = params["attention"]
+        with torch.no_grad():
+            rho.E.copy_(E)
+            rho.B.copy_(torch.tensor(params["B"], dtype=torch.float32))
+            rho.attention.in_proj_weight.copy_(torch.tensor(att["in_proj_weight"], dtype=torch.float32))
+            rho.attention.in_proj_bias.copy_(torch.tensor(att["in_proj_bias"], dtype=torch.float32))
+            rho.attention.out_proj.weight.copy_(torch.tensor(att["out_proj_weight"], dtype=torch.float32))
+            rho.attention.out_proj.bias.copy_(torch.tensor(att["out_proj_bias"], dtype=torch.float32))
+        return rho
+    formula="(x,y)->h_sj=E_skjuk+B_sj->single head self Attention"
+
+
+
+
 class PolynomialFeatureMap(nn.Module):
     """
     Fixed (non-trainable) degree-2 polynomial feature map.
