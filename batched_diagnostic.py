@@ -39,13 +39,13 @@ from buildnetwork import DEFAULT_DATASET_PATH
 from loadrun import gather_runs
 
 
-def list_run_folders(base_dir: str):#  To only contains runs that convergedmaybe pass this as args?, maybe to much?
+def list_run_folders(base_dir: str):#  Add the folder patterns as args?
     random_sampling=False
     runs=[]
     """Sub-folders of base_dir that contain a model_weights.pt."""
-    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_11.36_h10_*',random_sampling=random_sampling,init_scheme_filter='uniform_bias',
+    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_47.77_*',random_sampling=random_sampling,init_scheme_filter='uniform',
                                init_scale_filter=1.0,verbose=True))
-    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_11.36_h10_*',random_sampling=random_sampling,init_scheme_filter='uniform_bias',
+    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_47.77_*',random_sampling=random_sampling,init_scheme_filter='uniform_bias',
                                init_scale_filter=4.5,verbose=True))
     runs=pd.concat(runs,ignore_index=True)
     weights=runs['weight_path'].tolist()
@@ -126,4 +126,10 @@ def main():
 
 
 if __name__ == "__main__":
+
+    '''
+    Change base_dir args to something like 
+    [(basedir, run_pattern,init_scale_filter,init_scheme_filter,randomsampling),...]
+    And use this to leverages changes the load_run_folders function (maybe just use load_filter_runs)
+    '''
     main()

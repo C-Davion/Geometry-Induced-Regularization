@@ -52,7 +52,7 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
     init_schemes={
         "uniform": "weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal", #1.0 3.0 6.0
         "normal": "weight:he_normal,bias:normal,Attention:xavier_normal,embedding:normal" , #TEMP #3.0
-        "uniform_bias":"weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal" #1.0 6.0
+        "uniform_bias":"weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal, embedding_bias:normal" #1.0 6.0
     }
 
     if verbose:
@@ -132,11 +132,11 @@ def gather_runs(base_dirs=BASE_DIR,folder_patterns=FOLDER_PATTERN,  threshold=GR
             df = load_filtered_runs(base_dir=base_dir, folder_pattern=pattern,
                                     threshold=threshold,  random_sampling=random_sampling,
                                     init_scheme_filter=init_scheme_filter,init_scale_filter=init_scale_filter,verbose=verbose,)
-            if len(df):
+            if not df.empty:
                 df = df.copy()
                 df["base_dir"] = base_dir  #TODO to debug
                 dfs.append(df)
-    return pd.concat(dfs, ignore_index=True)
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 
 if __name__=="__main__":

@@ -156,6 +156,12 @@ def plot(runs: pd.DataFrame, title, fields=FIELDS, logx=False, figsize=(10, 5),
     return fig, ax
 
 if __name__ == "__main__":
+    '''
+    When refactoring this file, save everything to a dataframe and plot from the dataframe.
+    '''
+
+
+
     rank_method="float64_half" #between float64, float32, float32_rtol and stable_rank
     hidden_dims=[10,20,40,60,80,100,200,180,140,220,160,120,240,480,420,360,300,240] #prevent writing them in order
     #hidden_dims=[12,14,16,18,3,4,5,6,7,8,9,10] #smaller n

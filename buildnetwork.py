@@ -9,7 +9,6 @@ Has functions that
 '''
 import json
 from pathlib import Path
-from posix import truncate
 
 import torch
 import numpy as np
@@ -22,7 +21,7 @@ from data_generation import load_dataset
 from matplotlib.legend_handler import HandlerBase
 from matplotlib.lines import Line2D
 
-DEFAULT_DATASET_PATH=Path('generated_dataset')/'dataset'/'score_47.77.pt'
+DEFAULT_DATASET_PATH=Path('generated_datasets')/'datasets'/'score_47.77.pt'
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
 
@@ -240,7 +239,7 @@ def plot_run(run_dir,dataset_path=DEFAULT_DATASET_PATH, out_dir=None,
  
     # Training samples used for this run.
     if scatter_training:
-        ax.scatter(X_train.squeeze(-1).numpy(), Y.train.(-1).numpy(),
+        ax.scatter(X_train.squeeze(-1).numpy(), Y_train.squeeze(-1).numpy(),
                s=12, color="black", alpha=0.5, zorder=2,
                label="training samples")
  
