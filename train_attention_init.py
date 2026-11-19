@@ -20,15 +20,15 @@ import matplotlib.pyplot as plt
 import time
 from relu_network import OneHiddenLayerReLUNet, LinearFeatureAttention
 from data_generation import generate_dataset,train_val_split
-from helper import _jsonify_param,stacked_jacobian_rank,pattern_stats,init_weight_,init_bias,init_rho_
+from helper import _jsonify_param,stacked_jacobian_rank,pattern_stats,init_weight_,init_bias,init_rho,load_dataset
 
 
 
 # ── Main training routine ────────────────────────────────────────────────────
 
 def train_network(
-    target_fn: Callable[[torch.Tensor], torch.Tensor],
-    input_dim: int = 1,
+    datas:tuple(torch.Tensor)=None,
+    input_dim: int =1,
     seq_len: int =8,
     embed_dim: int=32,
     hidden_dim: int = 20,
@@ -36,13 +36,18 @@ def train_network(
     n_samples: int = 200,
     x_range: Tuple[float, float] = (-3.0, 3.0),
     noise_std: float = 0.0,
+    init_scale:float=0.0,
+    init_scheme: str='uniform_bias',
     lr: float = 1e-2,
     epochs: int = 2000,
+    batch_size: int=32,
     log_every: int = 10,
     seed: int = 0,
     timestamp: str = None,
     score: Optional[float] = None,
     target_params: Optional[dict] = None,
+    dataset_path:str='Not Given',
+    optimizer_choice: str='Adam',
     out_root: str = "reg_experiments_attention_SGD",
     rho: LinearFeatureAttention = None,
     grad_tol: float = 1.5e-5,
@@ -85,11 +90,7 @@ def train_network(
     print(f"Training on {device}")
 
     # ── 1. Build the (single) training batch ───────────────────────────────
-    X, Y = generate_dataset(
-        target_fn, n_samples=n_samples, input_dim=input_dim,
-        x_range=x_range, noise_std=noise_std, seed=seed, is_random=True
-    )
-    X_train,X_val,Y_train,Y_val=train_val_split(X,Y)
+    X_train,Y_train,X_val,Y_val=datas
     X_train=X_train.to(device,dtype=torch.float32)
     X_val=X_val.to(device,dtype=torch.float32)
     Y_train=Y_train.to(device,dtype=torch.float32)
@@ -98,14 +99,24 @@ def train_network(
     # print((Y_train - X_train).abs().max().item())
 
      # ── 2. Initialise the network ───────────────────────────────────────────
-    init_scale = 1.0    #Do not touch here, to change it, go to train_attention.py but init_type will be kaiming_uniform
-    init_type  = 'he_uniform' # he_uniform | he_normal | torch_default | xavier_uniform | xavier_normal
-                            # lecun_normal | lecun_uniform | orthogonal | trunc_0.02
-    bias_type  = 'uniform'    # zeros | uniform | torch_default | normal
-    rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default
-    E_dist     = 'normal'     # normal | uniform
+    if init_scheme=='uniform_bias':
+        init_type  = 'he_uniform' # he_uniform | he_normal | torch_default | xavier_uniform | xavier_normal
+                                # lecun_normal | lecun_uniform | orthogonal | trunc_0.02
+        bias_type  = 'uniform'    # zeros | uniform | torch_default | normal
+        rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default
+        E_dist     = 'normal'     # normal | uniform
+        B_dist     ='normal'       #normal | uniform
+    if init_scheme=='normal_bias':
+        init_type  = 'he_normal' # he_uniform | he_normal | torch_default | xavier_uniform | xavier_normal
+                                # lecun_normal | lecun_uniform | orthogonal | trunc_0.02
+        bias_type  = 'normal'    # zeros | uniform | torch_default | normal
+        rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default #to xavier_normal?
+        E_dist     = 'normal'     # normal | uniform
+        B_dist     ='normal'       #normal | uniform
+    else:
+        raise ValueError("unknown Init scheme")
     rho = LinearFeatureAttention(seq_len, embed_dim, init_scale).to(device, dtype=torch.float32)
-    init_rho_(rho, rho_type, E_dist, init_scale)
+    init_rho_(rho, rho_type, E_dist, B_dist, init_scale) #to finish in helper
 
     feature_dim = rho.output_dim if rho is not None else input_dim
     feature_parameter_count = rho.get_parameter_count()
@@ -171,11 +182,17 @@ def train_network(
             return val_loss
     
     total_epochs = 0
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    if optimizer_choice=='Adam':
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    if optimizer_choice=='SGD':
+        optimizer=torch.optim.SGD(net.parameters(),lr=lr)
+    else:
+        print('unknown optimizer choice, defaulted to Adam Full batch')
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1000,threshold=1e-5, threshold_mode='abs', min_lr=1e-8,)
     loss_fn = nn.MSELoss()
-    optimizer_config=f"Adam with {scheduler.__class__.__name__}"
+    optimizer_config=f"{optimizer.__class__.__name__} with {scheduler.__class__.__name__}"
 
     for _ in range(epochs):
         net.train()
@@ -190,7 +207,7 @@ def train_network(
             pattern_hashes.append(pat_hash)                     # and this
 
         if total_epochs % log_every == 0:
-            jr = stacked_jacobian_rank(net, X_train)
+            jr = stacked_jacobian_rank(net, X_train) #To keep?
             p_rank, n_dist = pattern_stats(net, X_train)
             log_epochs.append(total_epochs)
             jac_ranks.append(jr)
@@ -233,7 +250,7 @@ def train_network(
     target_params = target_params or {}
 
     config = dict(
-    input_dim=input_dim,
+    intput_dim=input_dim,
     seq_len=seq_len,
     embed_dim=embed_dim,
     hidden_dim=hidden_dim,
@@ -248,8 +265,11 @@ def train_network(
     timestamp=timestamp,
     total_epochs=total_epochs,
     grad_tol=grad_tol,
+    dataset_path=dataset_path,
+    optimizer_config=optimizer_config,
     initalisation_scale=init_scale,
-    initialisation_type=f"weight:{init_type},bias:{bias_type},Attention:{rho_type},embedding:{E_dist}"
+    initialisation_type=f"weight:{init_type},bias:{bias_type},Attention:{rho_type},embedding:{E_dist}",
+    rho_formula=rho.formula
     )
     max_jacobian_rank = max(jac_ranks) if jac_ranks else 0
 
@@ -375,9 +395,7 @@ def train_network(
             jac_rank_at_min_grad_norm=jac_rank_at_best_state,
             p_rank_at_min_grad_norm=p_rank_at_best_state,
             ndistinct_pattern_at_min_grad_norm=n_dist_at_best_state,
-            optimizer_config=optimizer_config,
             time_taken=f"Training took {end-start} second",
-            rho_formula=rho.formula,
             ),
             f,
         indent=2,
@@ -390,34 +408,37 @@ def train_network(
 
 # ── Example usage ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    from target_fn_attention import make_target_fn_attention, iter_target_functions_attention
+    from target_fn_attention import iter_target_functions_attention,make_target_fn_attention
     jsonl_path ="intresting_function_attention.jsonl"
-
-    for hidden_dim in [10,12,14,16,18,20]:# this order because in the code, we modifty target_params @ section 7 saving config
-        for epoch in [60000]:
-            for i in range(10):
-                for score, target_params,seq_len,embed_dim in iter_target_functions_attention(jsonl_path):
-                    target_fn = make_target_fn_attention(**target_params)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    net, initial_net, out_dir = train_network(
-                        target_fn=target_fn,
-                        input_dim=1,
-                        seq_len=seq_len,
-                        embed_dim=embed_dim,
-                        hidden_dim=hidden_dim,
-                        output_dim=1,
-                        n_samples=200,
-                        x_range=(-1.0, 1.0),
-                        noise_std=0.0,
-                        lr=1e-3,
-                        timestamp=timestamp,
-                        epochs=epoch,
-                        log_every=500,
-                        seed=None,
-                        target_params=target_params,
-                        out_root="reg_experiments_attention_init",
-                        score=score,
-                        rho=LinearFeatureAttention,
-                    )
-                    print(f"run {i,hidden_dim,epoch} ended")
+    datasets=[Path("generated_datasets/datasets/score_47.77.pt")]
+    for score, target_params,_,_ in iter_target_functions_attention(jsonl_path):
+        dataset_path=Path(f'generated_datasets/datasets/score_{score}.pt')
+        datas,hyperparams=load_dataset(dataset_path)
+        for hidden_dim in [10,12,14,16,18,20]:# this order because in the code, we modifty target_params @ section 7 saving config
+            for epoch in [60000]:
+                for i in range(10):
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        net, initial_net, out_dir = train_network(
+                                datas=datas
+                                input_dim=hyperparams['input_dim'],
+                                seq_len=hyperparams['seq_len'],
+                                embed_dim=hyperparams['embed_dim'],
+                                hidden_dim=hidden_dim,
+                                output_dim=1,
+                                n_samples=hyperparams['num_train'],
+                                x_range=hyperparams['x_range'],
+                                noise_std=0.0,
+                                lr=1e-3,
+                                batch_size=32
+                                timestamp=timestamp,
+                                epochs=epoch,
+                                log_every=500,
+                                seed=None,
+                                target_param=target_param
+                                dataset_path=dataset_path.name,
+                                out_root="reg_experiments_attention_randomsampling",
+                                score=score,
+                                rho=LinearFeatureAttention
+                                )
+                        print(f"run {i,hidden_dim,epoch} ended")
     print("all run ended")

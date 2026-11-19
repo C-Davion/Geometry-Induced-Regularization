@@ -1,11 +1,10 @@
 from pathlib import Path
 import json
-from buildnetwork import DEFAULT_DATASET_PATH, DEVICE
+from buildnetwork import DEFAULT_DATASET_PATH
 FIELDS = ["jac_rank_at_min_grad_norm", "p_rank_at_min_grad_norm","ndistinct_pattern_at_min_grad_norm"]
 BASE_DIR= Path(__file__).resolve().parent / "reg_experiments_attention_init" #change here to swtich between SGD and init for Adam
 GRAD_THRESHOLD=1.5e-5
 FOLDER_PATTERN = "run_47.77_hxx_date_*"
-from compute_ranks import add_jacobian_ranks, _write_df
 import pandas as pd
 
 
@@ -70,6 +69,13 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
         except KeyError:
             dataset_path=DEFAULT_DATASET_PATH
         hidden_dim=config[ "hidden_dim"]
+        try:
+            optimizer_choice=config["optimizer_config"]
+        except KeyError:
+            if 'SGD' not in base_dir.name  or 'sgd' not in base_dir.name:
+                optimizer_choice='Adam with CosineAnnealingLR'
+            else:
+                optimizer_choice='SGD with CosineAnnealingLR'
 
         entries = _read_json_or_jsonl(log_file)
         for data in entries:
@@ -79,26 +85,28 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
             if random_sampling:
                 if init_scheme== init_schemes[init_scheme_filter] and init_scale==init_scale_filter:
                     record = {"run": run_dir.name}
+                    record['weight_path']=run_dir /"model_weights.pt"
+                    record['hidden_dim']= hidden_dim
                     record['scale']=init_scale_filter
                     record['scheme']=init_scheme_filter
                     record['dataset']=dataset_path
-                    record['weight_path']=run_dir /"model_weights.pt"
                     record['is_random_sampling']=random_sampling
-                    record['hidden_dim']= hidden_dim
+                    record['optimizer']=optimizer_choice
                     records.append(record)
                     break
             else:
                 norm = data.get("min_normalized_grad_norm")
                 if norm is not None and  norm < threshold and  init_scheme== init_schemes[init_scheme_filter] and init_scale==init_scale_filter : #change this for filtering with init scheme.
                     record = {"run": run_dir.name}
+                    record['weight_path']=run_dir / "model_weights.pt"
+                    record['hidden_dim']= hidden_dim
                     record['scale']=init_scale_filter
                     record['scheme']=init_scheme_filter
                     record['dataset']=dataset_path
-                    record['weight_path']=run_dir / "model_weights.pt"
                     record['is_random_sampling']=random_sampling
-                    record['hidden_dim']= hidden_dim
+                    record['optimizer']=optimizer_choice
                     records.append(record)
-                    break
+                    break 
 
     df = pd.DataFrame(records)
 
@@ -112,8 +120,8 @@ def gather_runs(base_dirs=BASE_DIR,folder_patterns=FOLDER_PATTERN,  threshold=GR
                     random_sampling=False,init_scheme_filter='uniform_bias',init_scale_filter=1.0, verbose=True):
     
     """
-    Apply the usual grad-norm filter (expstats_attention) inside every
-    directory in base_dirs and concatenate the results. Adds a "base_dir"
+    when multiple patterns and multiple base dir are being filtered with the same init_scale_filter and init_scheme_filter
+    concatenates the results and add base_dir columns
     column, since a run's folder name alone no longer says where it lives.
     """
     if isinstance(base_dirs,str):
@@ -134,7 +142,7 @@ def gather_runs(base_dirs=BASE_DIR,folder_patterns=FOLDER_PATTERN,  threshold=GR
                                     init_scheme_filter=init_scheme_filter,init_scale_filter=init_scale_filter,verbose=verbose,)
             if not df.empty:
                 df = df.copy()
-                df["base_dir"] = base_dir  #TODO to debug
+                df.insert(loc=0,column='base_dir',value= base_dir)  #TODO to debug
                 dfs.append(df)
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 

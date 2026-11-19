@@ -13,3 +13,4 @@ img/
 experiments/
 .venv
 .ipynb_checkpoint
+*.csv
