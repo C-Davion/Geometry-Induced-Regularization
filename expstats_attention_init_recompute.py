@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 import argparse
+import numpy as np
+from matplotlib import pyplot as plt
 
-PLOT_FIELDS=['rank_full','num_distinct_pat', 'pattern_rank'] #TO COMPLETE
+PLOT_FIELDS=['rank_full','num_distinct_pat','pattern_rank'] 
 
 
 
@@ -20,7 +22,7 @@ def build_and_save_df_for_plot(base_dirs,patterns,random_sampling=False,init_sch
 
 
 
-def aggregate(runs:pd.DataFrame, fields=FIELDS):
+def aggregate(runs:pd.DataFrame, fields=PLOT_FIELDS):
     """For each n_1: mean, variance and number of runs of each field."""
     return runs.groupby("n_1")[fields].agg(["mean", "var", "count", "min", "max"]).sort_index()
 

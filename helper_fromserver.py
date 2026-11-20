@@ -340,3 +340,26 @@ def make_run_dir(out_root, prefix, run_id):
         except FileExistsError:
             n += 1
             out_dir = base.with_name(f"{base.name}_v{n}")
+
+
+
+def load_dataset(dataset_path):
+    """
+    Load a saved .pt dataset.
+
+    Returns:
+        X_train, Y_train, X_val, Y_val
+    """
+    data = torch.load(
+        dataset_path,
+        map_location="cpu",
+        weights_only=True
+    )
+
+    X_train = data["X_train"]
+    Y_train = data["Y_train"]
+    X_val = data["X_val"]
+    Y_val = data["Y_val"]
+    
+
+    return (X_train, Y_train, X_val, Y_val),data

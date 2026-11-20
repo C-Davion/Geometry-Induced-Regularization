@@ -1,19 +1,23 @@
 '''
-Some function used to diagnosis the training,  put them here to not clog the train file.
+Some function used to diagnosis the training or to compute the local dimension with the method : float64,float32... passed as argument,  
+put them here to not clog the train file.
 '''
 import json
 from copy import deepcopy
-from pathlib import Path
-import glob
-from typing import Callable, Optional, Tuple, Union
-from datetime import datetime
+#from pathlib import Path
+#import glob
+from typing import Callable, Optional, Tuple
+#from datetime import datetime
 import torch
 import torch.nn as nn
 from torch.func import functional_call, jacrev
-import matplotlib.pyplot as plt
-import time
+#import matplotlib.pyplot as plt
+#import time
 from relu_network import OneHiddenLayerReLUNet, QuadraticFeatureMap
 from data_generation import generate_dataset,train_val_split
+import math
+#import copy
+from contextlib import contextmanager
 #torch.set_default_dtype(torch.float64)
 def _jsonify_param(value):
     """Turn a target-function parameter into a JSON-serializable value."""
@@ -21,23 +25,60 @@ def _jsonify_param(value):
         return value.tolist()
     return value
 
+# ── Iterages over the target functions generates by ploteacher, used in train2.py whe rhox(x)=(x,x**2) ────────────────────────────
+
+def iter_target_functions(jsonl_path):
+    """
+    Iterate over a JSONL file whose lines have the form
+
+    {
+        "score": ...,
+        "A": [...],
+        "A1": [...],
+        "B": [...],
+        "B1": [...]
+    }
+    """
+    with open(jsonl_path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            obj = json.loads(line)
+
+            target_params = {
+                "A": torch.tensor(obj["A"], dtype=torch.float32).reshape(-1, 1),
+                "A1": torch.tensor(obj["A1"], dtype=torch.float32).reshape(-1, 1),
+                "B": torch.tensor(obj["B"], dtype=torch.float32).reshape(-1, 1),
+                "B1": torch.tensor(obj["B1"], dtype=torch.float32).reshape(-1, 1),
+            }
+
+            yield obj["score"], target_params
+            break #do just one
+
 
 # ── Structural-quantity helpers (batch versions) ────────────────────────────
-
-
-def stable_rank(M: torch.Tensor) -> float:
+@contextmanager
+def _float64_copy(net, X):
     """
-    Stable rank  ||M||_F^2 / ||M||_2^2 = sum_i sigma_i^2 / sigma_max^2.
-    Real-valued, in [1, rank(M)] (0 for the zero matrix), needs no tolerance.
+    Yield (net64, X64): a float64 deep copy of `net` (the original is left
+    untouched, so training can continue in float32) and X in float64.
+
+    torch's default dtype is switched to float64.
     """
-    s = torch.linalg.svdvals(M)
-    if s.numel() == 0 or s[0] == 0:
-        return 0.0
-    return float((s ** 2).sum() / s[0] ** 2)
+    old = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float64)
+    try:
+        yield deepcopy(net).double(), X.to(torch.float64)
+    finally:
+        torch.set_default_dtype(old)
 
 
-def stacked_jacobian(net, X: torch.Tensor) -> torch.Tensor:
-    """Jacobian of θ -> [f(θ,x1); ...; f(θ,xN)] w.r.t. all parameters, shape (N*output_dim, P)."""
+def stacked_jacobian_rank(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> int:
+    """
+    Rank of the Jacobian of θ -> [f(θ,x1); ...; f(θ,xN)] w.r.t. all
+    parameters θ, evaluated at the current weights, over the full batch X.
+    """
     params = dict(net.named_parameters())
 
     def f_batch(p: dict) -> torch.Tensor:
@@ -45,27 +86,47 @@ def stacked_jacobian(net, X: torch.Tensor) -> torch.Tensor:
         return out.flatten()               # (N*output_dim,)
 
     jac_dict = jacrev(f_batch)(params)
-    return torch.cat([j.flatten(start_dim=1) for j in jac_dict.values()], dim=1)
+    J = torch.cat([j.flatten(start_dim=1) for j in jac_dict.values()], dim=1)
+    return int(torch.linalg.matrix_rank(J))
+
+def stacked_jacobian_rank_float64(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> int:
+    """
+    Rank of the Jacobian of θ -> [f(θ,x1); ...; f(θ,xN)] w.r.t. all
+    parameters θ, evaluated at the current weights, over the full batch X.
+    Computed in float64 (float32 underestimates the rank).
+    """
+    with _float64_copy(net, X) as (net64, X64):
+        params = dict(net64.named_parameters())
+
+        def f_batch(p: dict) -> torch.Tensor:
+            out = functional_call(net64, p, X64)   # (N, output_dim)
+            return out.flatten()                   # (N*output_dim,)
+
+        jac_dict = jacrev(f_batch)(params)
+        J = torch.cat([j.flatten(start_dim=1) for j in jac_dict.values()], dim=1)
+        return int(torch.linalg.matrix_rank(J))
 
 
-def stacked_jacobian_rank(net, X: torch.Tensor, rtol=None,
-                          stable: bool = False) -> Union[int, float]:
-    """rtol=None -> torch's default max(m,n)*eps(dtype). stable=True -> stable rank (float)."""
-    J = stacked_jacobian(net, X)
-    if stable:
-        return stable_rank(J)
-    return int(torch.linalg.matrix_rank(J, rtol=rtol))
-
-
-def pattern_stats(net, X: torch.Tensor, rtol=None,
-                  stable: bool = False) -> Tuple[Union[int, float], int]:
+def pattern_stats(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> Tuple[int, int]:
     """Return (rank of pattern matrix, number of distinct pattern rows)."""
     with torch.no_grad():
         pat = net.activation_pattern(X)          # (N, hidden_dim)
-    P = pat.to(X.dtype)                          # was .float(); identical for float32 X
-    rank = stable_rank(P) if stable else int(torch.linalg.matrix_rank(P, rtol=rtol))
+    rank = int(torch.linalg.matrix_rank(pat.float()))
     n_distinct = len(set(tuple(row.tolist()) for row in pat))
     return rank, n_distinct
+
+def pattern_stats_float64(net: OneHiddenLayerReLUNet, X: torch.Tensor) -> Tuple[int, int]:
+    """Return (rank of pattern matrix, number of distinct pattern rows)."""
+    with _float64_copy(net, X) as (net64, X64):
+        with torch.no_grad():
+            pat = net64.activation_pattern(X64)      # (N, hidden_dim)
+    rank = int(torch.linalg.matrix_rank(pat.float()))
+    n_distinct = len(set(tuple(row.tolist()) for row in pat))
+    return rank, n_distinct
+
+
+# ── Used for debugging convergence,most of it was used when rho(x)=(x,x**2) ────────────────────────────
+
 def adam_step_norm(optimizer):
     """
     Norm of the update Adam would actually apply on its NEXT .step() call,
@@ -149,71 +210,11 @@ def find_kinks(target_fn, x_range=(-3.0, 3.0), n_points=20000, rel_thresh=0.05):
             kink_locations.append(round(x[center, 0].item(), 4))
 
     return kink_locations
-def iter_target_functions(jsonl_path):
-    """
-    Iterate over a JSONL file whose lines have the form
 
-    {
-        "score": ...,
-        "A": [...],
-        "A1": [...],
-        "B": [...],
-        "B1": [...]
-    }
-    """
-    with open(jsonl_path) as f:
-        for line in f:
-            if not line.strip():
-                continue
 
-            obj = json.loads(line)
+# ── Muon optimizer and related functions (not used in the end) ────────────────────────────
 
-            target_params = {
-                "A": torch.tensor(obj["A"], dtype=torch.float32).reshape(-1, 1),
-                "A1": torch.tensor(obj["A1"], dtype=torch.float32).reshape(-1, 1),
-                "B": torch.tensor(obj["B"], dtype=torch.float32).reshape(-1, 1),
-                "B1": torch.tensor(obj["B1"], dtype=torch.float32).reshape(-1, 1),
-            }
 
-            yield obj["score"], target_params
-            break #do just one
-def iter_target_functions_attention(jsonl_path):
-    """
-    Iterate over a JSONL file whose lines have the form
- 
-    {
-        "score": ...,
-        "rho": {...},   # LinearFeatureAttention weights, see build_rho()
-        "A": [...],
-        "A1": [...],
-        "B": [...],
-        "B1": [...]
-    }
- 
-    Yields (score, target_params) pairs, where target_params is a dict with
-    keys "A", "A1", "B", "B1", "rho" — matching make_target_fn's parameter
-    names exactly, so it can be unpacked straight into it:
- 
-        for score, target_params in iter_target_functions(path):
-            target_fn = make_target_fn(**target_params)
-    """
-    with open(jsonl_path) as f:
-        for line in f:
-            if not line.strip():
-                continue
- 
-            obj = json.loads(line)
- 
-            target_params = {
-                "A": torch.tensor(obj["A"], dtype=torch.float32).reshape(-1, 1),
-                "A1": torch.tensor(obj["A1"], dtype=torch.float32).reshape(-1, 1),
-                "B": torch.tensor(obj["B"], dtype=torch.float32).reshape(-1, 1),
-                "B1": torch.tensor(obj["B1"], dtype=torch.float32).reshape(-1, 1),
-                "rho": build_rho(obj["rho"]),
-            }
- 
-            yield obj["score"], target_params
-            break  # do just one
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     """Orthogonalize a 2D matrix's update via a quintic Newton-Schulz iteration."""
     assert G.ndim == 2
@@ -278,6 +279,68 @@ def maybe_warm_restart(opt_muon, scheduler_weight, opt_bias, scheduler_bias,
         scheduler_bias.num_bad_epochs = 0
         return True, total_epochs
     return False, last_restart_epoch
+
+
+#For the initialisation file (train_attention_init)
+def init_weight_(W, scheme):
+    """In-place init of a 2-D weight (out, in)."""
+    fan_out, fan_in = W.shape
+    with torch.no_grad():
+        if   scheme == 'he_uniform':     nn.init.kaiming_uniform_(W, nonlinearity='relu')
+        elif scheme == 'he_normal':      nn.init.kaiming_normal_(W, nonlinearity='relu')
+        elif scheme == 'torch_default':  nn.init.kaiming_uniform_(W, a=math.sqrt(5))
+        elif scheme == 'xavier_uniform': nn.init.xavier_uniform_(W)
+        elif scheme == 'xavier_normal':  nn.init.xavier_normal_(W)
+        elif scheme == 'lecun_normal':   nn.init.normal_(W, 0.0, 1 / math.sqrt(fan_in))
+        elif scheme == 'lecun_uniform':  nn.init.uniform_(W, -math.sqrt(3 / fan_in), math.sqrt(3 / fan_in))
+        elif scheme == 'orthogonal':     nn.init.orthogonal_(W, gain=math.sqrt(2))
+        elif scheme == 'trunc_0.02':     nn.init.trunc_normal_(W, 0.0, 0.02, -0.04, 0.04)
+        else: raise ValueError(f"Unknown weight init: {scheme}")
+    return W
+
+def init_bias(n, fan_in, scheme, device):
+    if   scheme == 'zeros':         return torch.zeros(n, device=device)
+    elif scheme == 'uniform':       return torch.rand(n, device=device) * 2 - 1          # U(-1, 1), your current one
+    elif scheme == 'torch_default': return (torch.rand(n, device=device) * 2 - 1) / math.sqrt(fan_in)
+    elif scheme == 'normal':        return torch.randn(n, device=device)
+    else: raise ValueError(f"Unknown bias init: {scheme}")
+
+def init_rho_(rho, attn_scheme, E_dist, B_dist, scale):
+    """Init the feature-attention module (E, B, and the attention projections)."""
+    with torch.no_grad():
+        # Token embeddings E: acts like a frequency scale on the scalar input
+        if   E_dist == 'normal':  rho.E.normal_(0.0, scale)
+        elif E_dist == 'uniform': rho.E.uniform_(-math.sqrt(3) * scale, math.sqrt(3) * scale)  # same std as normal
+        else: raise ValueError(f"Unknown E_dist: {E_dist}")
+
+        if   B_dist == 'normal':  rho.B.normal_(0.0, scale)
+        elif B_dist == 'uniform': rho.B.uniform_(-math.sqrt(3) * scale, math.sqrt(3) * scale)  # same std as normal
+        elif B_dist == 'zeros' : rho.B.zeros_
+        else: raise ValueError(f"Unknown B_dist: {B_dist}")
+        
+
+        # Attention: q, k, v are stacked in in_proj_weight (3*d, d); init each block separately
+        mha = rho.attention
+        for blk in mha.in_proj_weight.chunk(3, dim=0):   # chunks are views -> in-place works
+            init_weight_(blk, attn_scheme)
+        init_weight_(mha.out_proj.weight, attn_scheme)
+        mha.in_proj_bias.zero_()
+        mha.out_proj.bias.zero_()
+#### For parallel script, resovling folder name race (train attention_SGD_para)
+
+def make_run_dir(out_root, prefix, run_id):
+    """Atomic, race-free: run_id makes names unique across parallel tasks;
+    the _vN suffix only kicks in if you re-run the same run_id on the same day."""
+    base = Path(out_root) / f"{prefix}{run_id}"
+    out_dir, n = base, 0
+    while True:
+        try:
+            out_dir.mkdir(parents=True, exist_ok=False)
+            return out_dir
+        except FileExistsError:
+            n += 1
+            out_dir = base.with_name(f"{base.name}_v{n}")
+
 
 
 def load_dataset(dataset_path):

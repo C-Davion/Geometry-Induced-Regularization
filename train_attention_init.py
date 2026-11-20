@@ -1,10 +1,29 @@
 """
 train_attention_init.py
 --------
-Like the train_attention.py, but this time we focus on varying the initialisation scheme rather then the init_scale. 
-To keep the file readable, we remove the section/branch with the muon optimizer and keep only adam.
+Trains a OneHiddenLayerReLUNet to approximate a target function via
+full-batch Adam (a single fixed training batch, no minibatching).
 
-However, we implement way to initilise the network differently.
+During training, logs:
+  - the training loss (every epoch)
+  - three structural quantities, every `log_every` epochs:
+      1. Jacobian rank    (rank of the stacked Jacobian of θ -> f_θ(X) over
+                            the whole training batch X)
+      2. Pattern rank      (rank of the activation-pattern matrix over X)
+      3. # distinct patterns (number of distinct rows in that matrix)
+
+After training, produces:
+  - loss_and_quantities.png : loss (left) and the three quantities (right),
+                               side by side
+  - learned_vs_initial.png  : target function, initial network (light color),
+                               and learned network, overlaid
+                               (only drawn when input_dim == output_dim == 1)
+
+Everything is saved to a folder whose name is built from a user-supplied
+format string, e.g. "run_{score}_h{hidden_dim}_{dateofrun}_{runnumber}".
+
+Matching shell script: run_train_init.sh, before lauching, mkdir the out_root (to be safe)
+Includes way to modify the initialization of the network, NOT PASSED AS ARGUMENT IN THE MAIN TRAIN FUNCTION.
 """
 
 import json
@@ -15,19 +34,18 @@ from typing import Callable, Optional, Tuple
 from datetime import datetime
 import torch
 import torch.nn as nn
-from torch.func import functional_call, jacrev
 import matplotlib.pyplot as plt
 import time
 from relu_network import OneHiddenLayerReLUNet, LinearFeatureAttention
-from data_generation import generate_dataset,train_val_split
-from helper import _jsonify_param,stacked_jacobian_rank,pattern_stats,init_weight_,init_bias,init_rho,load_dataset
+from helper import _jsonify_param,stacked_jacobian_rank_float64,pattern_stats_float64,init_weight_,init_bias,init_rho_,load_dataset
 
 
-
+  
 # ── Main training routine ────────────────────────────────────────────────────
 
 def train_network(
-    datas:tuple(torch.Tensor)=None,
+    target_function: Callable[[torch.Tensor], torch.Tensor],
+    datas: tuple[torch.Tensor]=None,
     input_dim: int =1,
     seq_len: int =8,
     embed_dim: int=32,
@@ -36,7 +54,7 @@ def train_network(
     n_samples: int = 200,
     x_range: Tuple[float, float] = (-3.0, 3.0),
     noise_std: float = 0.0,
-    init_scale:float=0.0,
+    init_scale:float=1.0,
     init_scheme: str='uniform_bias',
     lr: float = 1e-2,
     epochs: int = 2000,
@@ -113,8 +131,20 @@ def train_network(
         rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default #to xavier_normal?
         E_dist     = 'normal'     # normal | uniform
         B_dist     ='normal'       #normal | uniform
-    else:
-        raise ValueError("unknown Init scheme")
+    if init_scheme=='normal_zero':
+        init_type  = 'he_normal' # he_uniform | he_normal | torch_default | xavier_uniform | xavier_normal
+                                # lecun_normal | lecun_uniform | orthogonal | trunc_0.02
+        bias_type  = 'zeros'    # zeros | uniform | torch_default | normal
+        rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default #to xavier_normal?
+        E_dist     = 'normal'     # normal | uniform
+        B_dist     ='zeros'       #normal | uniform
+    if init_scheme=='uniform_zero':
+        init_type  = 'he_uniform' # he_uniform | he_normal | torch_default | xavier_uniform | xavier_normal
+                                # lecun_normal | lecun_uniform | orthogonal | trunc_0.02
+        bias_type  = 'zeros'    # zeros | uniform | torch_default | normal
+        rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default #to xavier_normal?
+        E_dist     = 'normal'     # normal | uniform
+        B_dist     ='zeros'       #normal | uniform
     rho = LinearFeatureAttention(seq_len, embed_dim, init_scale).to(device, dtype=torch.float32)
     init_rho_(rho, rho_type, E_dist, B_dist, init_scale) #to finish in helper
 
@@ -124,7 +154,7 @@ def train_network(
     W1 = init_weight_(torch.empty(hidden_dim, feature_dim, device=device), init_type) * init_scale
     b1 = init_bias(hidden_dim, feature_dim, bias_type, device) * init_scale
     W2 = init_weight_(torch.empty(output_dim, hidden_dim, device=device), init_type) * init_scale
-    b2 = torch.zeros(output_dim, device=device)
+    b2 = init_bias(output_dim,feature_dim,bias_type,device)*init_scale
     
     net = OneHiddenLayerReLUNet(W1, b1, W2, b2, rho=rho).to(device,dtype=torch.float32)
 
@@ -207,8 +237,8 @@ def train_network(
             pattern_hashes.append(pat_hash)                     # and this
 
         if total_epochs % log_every == 0:
-            jr = stacked_jacobian_rank(net, X_train) #To keep?
-            p_rank, n_dist = pattern_stats(net, X_train)
+            jr = stacked_jacobian_rank_float64(net, X_train) 
+            p_rank, n_dist = pattern_stats_float64(net, X_train)
             log_epochs.append(total_epochs)
             jac_ranks.append(jr)
             pattern_ranks.append(output_dim * p_rank)
@@ -226,8 +256,8 @@ def train_network(
             best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
             loss_at_best_state=loss.item()
             val_loss_at_best_state=val_loss.item()
-            jr = stacked_jacobian_rank(net, X_train)
-            p_rank, n_dist = pattern_stats(net, X_train)
+            jr = stacked_jacobian_rank_float64(net, X_train)
+            p_rank, n_dist = pattern_stats_float64(net, X_train)
             jac_rank_at_best_state=jr
             p_rank_at_best_state=p_rank
             n_dist_at_best_state=n_dist
@@ -250,7 +280,7 @@ def train_network(
     target_params = target_params or {}
 
     config = dict(
-    intput_dim=input_dim,
+    input_dim=input_dim,
     seq_len=seq_len,
     embed_dim=embed_dim,
     hidden_dim=hidden_dim,
@@ -268,7 +298,7 @@ def train_network(
     dataset_path=dataset_path,
     optimizer_config=optimizer_config,
     initalisation_scale=init_scale,
-    initialisation_type=f"weight:{init_type},bias:{bias_type},Attention:{rho_type},embedding:{E_dist}",
+    initialisation_type=f"weight:{init_type},bias:{bias_type},Attention:{rho_type},embedding:{E_dist},embedding:{B_dist}",
     rho_formula=rho.formula
     )
     max_jacobian_rank = max(jac_ranks) if jac_ranks else 0
@@ -322,7 +352,7 @@ def train_network(
         with torch.no_grad():
             y_initial = initial_net(x_plot)
             y_learned = net(x_plot)
-            y_true    = target_fn(x_plot.cpu())
+            y_true    = target_function(x_plot.cpu())
         print("y_learned range:", y_learned.min().item(), y_learned.max().item())
         print("y_true    range:", y_true.min().item(), y_true.max().item())
         x_plot = x_plot.cpu()
@@ -336,8 +366,8 @@ def train_network(
                   label="Initial network", color="lightskyblue", linewidth=2, alpha=0.8)
         ax2.plot(x_plot.squeeze(), y_learned.squeeze(),
                   label="Learned network", color="darkblue", linewidth=2)
-        X_plot=X.cpu()
-        Y_plot=Y.cpu()
+        X_plot=X_train.cpu()
+        Y_plot=Y_train.cpu()
         ax2.scatter(X_plot.squeeze(), Y_plot.squeeze(), s=10, color="gray", alpha=0.4, label="Training data")
         ax2.legend()
         ax2.set_xlabel("x")
@@ -369,38 +399,50 @@ def train_network(
     }
     with open(out_dir / "config.json", "w") as f:
         json.dump(config_to_save, f, indent=2)
-
-    with open(out_dir / "training_log.json", "w") as f:
-        json.dump(
-            dict(
-            losses=losses,
-            val_losses=val_losses,
-            log_epochs=log_epochs,
-            jacobian_rank=jac_ranks,
-            pattern_rank=pattern_ranks,
-            n_distinct_patterns=n_distinct_list,
-            max_jacobian_rank=max_jacobian_rank,
-            final_gradient_norm=grad_norm,
-            critical_point_reached=critical_point_reached,
-            total_epochs=total_epochs,
-            min_grad_norm=min_grad_norm,
-            min_normalized_grad_norm=min_normalized_grad_norm,
-            epoch_reached=epoch_reached,
-            max_component_at_min_grad_norm=max_coord_at_min,
-            min_component_at_min_grad_norm=min_coord_at_min,
-            last_val_loss=val_losses[-1],
-            min_val_loss=min(val_losses),
-            loss_at_min_grad_norm=loss_at_best_state,
-            val_loss_at_min_grad_norm=val_loss_at_best_state,
-            jac_rank_at_min_grad_norm=jac_rank_at_best_state,
-            p_rank_at_min_grad_norm=p_rank_at_best_state,
-            ndistinct_pattern_at_min_grad_norm=n_dist_at_best_state,
-            time_taken=f"Training took {end-start} second",
-            ),
-            f,
-        indent=2,
-        )
-
+    if epochs>0: #traning acutally occurs
+        with open(out_dir / "training_log.json", "w") as f:
+            json.dump(
+                dict(
+                losses=losses,
+                val_losses=val_losses,
+                log_epochs=log_epochs,
+                jacobian_rank=jac_ranks,
+                pattern_rank=pattern_ranks,
+                n_distinct_patterns=n_distinct_list,
+                max_jacobian_rank=max_jacobian_rank,
+                final_gradient_norm=grad_norm,
+                critical_point_reached=critical_point_reached,
+                total_epochs=total_epochs,
+                min_grad_norm=min_grad_norm,
+                min_normalized_grad_norm=min_normalized_grad_norm,
+                epoch_reached=epoch_reached,
+                max_component_at_min_grad_norm=max_coord_at_min,
+                min_component_at_min_grad_norm=min_coord_at_min,
+                last_val_loss=val_losses[-1],
+                min_val_loss=min(val_losses),
+                loss_at_min_grad_norm=loss_at_best_state,
+                val_loss_at_min_grad_norm=val_loss_at_best_state,
+                jac_rank_at_min_grad_norm=jac_rank_at_best_state,
+                p_rank_at_min_grad_norm=p_rank_at_best_state,
+                ndistinct_pattern_at_min_grad_norm=n_dist_at_best_state,
+                time_taken=f"Training took {end-start} second",
+                ),
+                f,
+            indent=2,
+            )
+    else: #for random sampling
+        with open(out_dir / "training_log.json", "w") as f:
+            json.dump(
+                dict(
+                context="No training occured",
+                optimizer_config=optimizer_config,
+                time_taken=f"Training took {end-start} second",
+                rho_formula=rho.formula,
+                ),
+                f,
+            indent=2,
+            )
+    
     print(f"Saved all artefacts to: {out_dir}")
     return net, initial_net, out_dir
 
@@ -412,6 +454,7 @@ if __name__ == "__main__":
     jsonl_path ="intresting_function_attention.jsonl"
     datasets=[Path("generated_datasets/datasets/score_47.77.pt")]
     for score, target_params,_,_ in iter_target_functions_attention(jsonl_path):
+        target_function=make_target_fn_attention(**target_params)
         dataset_path=Path(f'generated_datasets/datasets/score_{score}.pt')
         datas,hyperparams=load_dataset(dataset_path)
         for hidden_dim in [10,12,14,16,18,20]:# this order because in the code, we modifty target_params @ section 7 saving config
@@ -419,7 +462,8 @@ if __name__ == "__main__":
                 for i in range(10):
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         net, initial_net, out_dir = train_network(
-                                datas=datas
+                                target_function=target_function,
+                                datas=datas,
                                 input_dim=hyperparams['input_dim'],
                                 seq_len=hyperparams['seq_len'],
                                 embed_dim=hyperparams['embed_dim'],
@@ -428,13 +472,15 @@ if __name__ == "__main__":
                                 n_samples=hyperparams['num_train'],
                                 x_range=hyperparams['x_range'],
                                 noise_std=0.0,
+                                init_scale=1.0,
+                                inti_scheme='uniform_bias',
                                 lr=1e-3,
-                                batch_size=32
+                                batch_size=32,
                                 timestamp=timestamp,
                                 epochs=epoch,
                                 log_every=500,
                                 seed=None,
-                                target_param=target_param
+                                target_param=target_params,
                                 dataset_path=dataset_path.name,
                                 out_root="reg_experiments_attention_randomsampling",
                                 score=score,
