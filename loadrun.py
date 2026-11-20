@@ -86,6 +86,7 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
                 if init_scheme== init_schemes[init_scheme_filter] and init_scale==init_scale_filter:
                     record = {"run": run_dir.name}
                     record['weight_path']=run_dir /"model_weights.pt"
+                    record['init_weight_path']=run_dir/'initial_weights.pt'
                     record['hidden_dim']= hidden_dim
                     record['scale']=init_scale_filter
                     record['scheme']=init_scheme_filter
@@ -99,6 +100,7 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
                 if norm is not None and  norm < threshold and  init_scheme== init_schemes[init_scheme_filter] and init_scale==init_scale_filter : #change this for filtering with init scheme.
                     record = {"run": run_dir.name}
                     record['weight_path']=run_dir / "model_weights.pt"
+                    record['init_weight_path']=run_dir/'initial_weights.pt'
                     record['hidden_dim']= hidden_dim
                     record['scale']=init_scale_filter
                     record['scheme']=init_scheme_filter

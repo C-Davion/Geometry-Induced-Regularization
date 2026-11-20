@@ -247,8 +247,8 @@ def _load_X_train(dataset_path, run_dir, cache):
 # DataFrame driver
 # ============================================================
 
-def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', weights_col="weights_path",
-                       rank_method="float64", device="cpu", dataset_key="dataset_path",
+def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', weights_col="weight_path",
+                       rank_method="float64", device="cpu", dataset_key="dataset_path", compute_initial=False,
                        default_dataset_path=DEFAULT_DATASET_PATH, verbose_every=25):
     """
     Add Jacobian-rank columns to `df` (in place; `df` is also returned):
@@ -264,12 +264,16 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
     weights_col : column with the path to model_weights.pt
     dataset_key : key of config.json holding the dataset path
                   (default_dataset_path is used if the key is absent)
+    compute_initial : if True, add prefix for the names so to distinguish between the initial_weights and the weights at critical point.
     device      : "cpu" by default (a float64 Jacobian of this size is cheap on CPU)
     """
     if rank_method not in _METHOD_SPECS:
         raise ValueError(f"method must be one of {list(_METHOD_SPECS)}, got {method!r}")
     suffix = "" if rank_method == "float64" else f"_{rank_method}"
+    prefix="" if not compute_initial else "init_"
     stable = _METHOD_SPECS[rank_method][2]
+    if compute_initial:
+        assert weights_col=="init_weight_path", "Mismatched between compute_initial and weight_col. This will compute the ranks at critical point but will be saved as init_."
 
     cache, results, n_rows, t0 = {}, [], len(df), time.time()
     for k, (_, row) in enumerate(df.iterrows(), start=1):
@@ -284,6 +288,7 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
             #res = jacobian_ranks(net, X_train, method=method, device=device)
             res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)["ranks"]
             res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
+            print(res)
         except Exception as e:                                   # keep going on a bad row
             print(f"[{k}/{n_rows}] {run_dir.name}: FAILED ({type(e).__name__}: {e})")
             res = {"rank_full": None, "rank_rho": None, "rank_rest": None, "num_distinct_pat": None, "pattern_rank": None,
@@ -295,7 +300,7 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
 
     for name in ("rank_full", "rank_rho", "rank_rest","num_distinct_pat","pattern_rank"):
         values = [r[name] for r in results]
-        df[name + suffix] = (pd.Series(values, index=df.index, dtype="float64") if stable
+        df[prefix+name + suffix] = (pd.Series(values, index=df.index, dtype="float64") if stable
                              else pd.Series(values, index=df.index, dtype="Int64"))
     df["n_train"] = pd.Series([r["n_train"] for r in results], index=df.index, dtype="Int64")
     df["rank_error"] = pd.Series([r["rank_error"] for r in results], index=df.index, dtype="object")

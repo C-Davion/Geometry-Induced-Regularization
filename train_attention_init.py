@@ -219,18 +219,24 @@ def train_network(
     else:
         print('unknown optimizer choice, defaulted to Adam Full batch')
         optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+        optimizer_choice='Adam'
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1000,threshold=1e-5, threshold_mode='abs', min_lr=1e-8,)
     loss_fn = nn.MSELoss()
     optimizer_config=f"{optimizer.__class__.__name__} with {scheduler.__class__.__name__}"
 
     for _ in range(epochs):
-        net.train()
-        loss = closure()
-        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-        optimizer.step()
-        scheduler.step()
-        val_loss = validation()
+        if optimizer_choice=='SGD':
+            #TODO write code for batch size SGD
+        else:
+            net.train()
+            loss = closure()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            optimizer.step()
+            scheduler.step()
+            val_loss = validation()
+
+
         with torch.no_grad():
             pat = net.activation_pattern(X_train)
             pat_hash = hash(tuple(pat.flatten().tolist()))     # add this
@@ -482,6 +488,7 @@ if __name__ == "__main__":
                                 seed=None,
                                 target_param=target_params,
                                 dataset_path=dataset_path.name,
+                                optimizer_choice='Adam',
                                 out_root="reg_experiments_attention_randomsampling",
                                 score=score,
                                 rho=LinearFeatureAttention
