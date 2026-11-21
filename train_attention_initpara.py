@@ -145,6 +145,10 @@ def train_network(
         rho_type   = 'xavier_uniform'  # same names as init_type; xavier_uniform = PyTorch's MHA default #to xavier_normal?
         E_dist     = 'normal'     # normal | uniform
         B_dist     ='zeros'       #normal | uniform
+    print("seq_len:", repr(seq_len), type(seq_len))
+    print("embed_dim:", repr(embed_dim), type(embed_dim))
+    print("init_scale:", repr(init_scale), type(init_scale))
+    print("torch version:", torch.__version__)
     rho = LinearFeatureAttention(seq_len, embed_dim, init_scale).to(device, dtype=torch.float32)
     init_rho_(rho, rho_type, E_dist, B_dist, init_scale) #to finish in helper
 
@@ -214,7 +218,7 @@ def train_network(
     total_epochs = 0
     if optimizer_choice=='Adam':
         optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-    if optimizer_choice=='SGD':
+    elif optimizer_choice=='SGD':
         optimizer=torch.optim.SGD(net.parameters(),lr=lr)
     else:
         print('unknown optimizer choice, defaulted to Adam Full batch')
@@ -246,7 +250,7 @@ def train_network(
             scheduler.step()
             val_loss = validation()
 
-        else:
+        else: #full batch training
             net.train()
             loss = closure(X_train,Y_train)
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
@@ -473,7 +477,6 @@ def train_network(
 
 # ── Example usage ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-   if __name__ == "__main__":
     import argparse, secrets
     from target_fn_attention import iter_target_functions_attention, make_target_fn_attention
 
@@ -483,16 +486,17 @@ if __name__ == "__main__":
     parser.add_argument("--jsonl", default="intresting_function_attention.jsonl")
     parser.add_argument("--dataset_dir", default="generated_datasets/datasets")
     parser.add_argument("--dataset", default=None, help="explicit dataset path (default: <dataset-dir>/score_<score>.pt)")
-    parser.add_argument("--init_scale",default=1.0,help="initialisation scale")
+    parser.add_argument("--init_scale",type=float,default=1.0,help="initialisation scale")
     parser.add_argument("--init_scheme",default='uniform_bias',choices=['uniform_bias','uniform_normal','uniform_zero','normal_zero'],help="initialisation scheme") 
     #parser.add_argument("--bias_scale",default=1.0,help= "initialisation scale for bias")
-    parser.add_argument("--optimizer_choice",default='Adam',choices=['Adam,SGD'],help="optimizer_choice")
+    parser.add_argument("--optimizer_choice",default='Adam',choices=['Adam','SGD'],help="optimizer_choice")
+    parser.add_argument("--out_dir",default="reg_experiments_attention_new")
     args = parser.parse_args()
 
-    score, target_params, _, _ = iter_target_functions_attention(args.jsonl)   # first function of the jsonl
+    score, target_params,_,_ = next(iter_target_functions_attention(args.jsonl))   # first function of the jsonl
     target_function = make_target_fn_attention(**target_params)
 
-    dataset_path = Path(args.dataset) if args.dataset else Path(args.dataset_dir) / f"score_{score}.pt"
+    dataset_path = Path(args.dataset) if args.dataset else Path(args.dataset_dir) / f"score_{score:.2f}.pt"
     datas, hyperparams = load_dataset(dataset_path)
 
     seed = secrets.randbelow(2**31)        # init seed: new every run, saved in config.json
@@ -516,10 +520,10 @@ if __name__ == "__main__":
         epochs=args.epochs,
         log_every=500,
         seed=seed,
-        target_param=target_params,
+        target_params=target_params,
         dataset_path=dataset_path.name,
-        optimizer_choice=args.optimizer_choice
-        out_root="reg_experiments_attention_randomsampling",
+        optimizer_choice=args.optimizer_choice,
+        out_root=args.out_dir,
         score=score,
         rho=LinearFeatureAttention,
     )

@@ -159,7 +159,7 @@ def train_network(
     net = OneHiddenLayerReLUNet(W1, b1, W2, b2, rho=rho).to(device,dtype=torch.float32)
 
     initial_net = deepcopy(net)   # frozen snapshot, for the "before" plot
-    print("X sum:", X.sum().item())              # should be identical every run
+    print("X sum:", X_train.sum().item())              # should be identical every run
     print("W1 sum:", net.W1.sum().item()) 
     
 
@@ -198,10 +198,10 @@ def train_network(
         net.zero_grad()   # leave state clean — this is a pure read, not a training step
 
         return norm, normalized_norm, max_component, min_component
-    def closure():
+    def closure(X_batch,Y_batch):
             optimizer.zero_grad()
-            pred=net(X_train)
-            loss=loss_fn(pred,Y_train)
+            pred=net(X_batch)
+            loss=loss_fn(pred,Y_batch)
             loss.backward()
             return loss
     def validation():
@@ -227,10 +227,27 @@ def train_network(
 
     for _ in range(epochs):
         if optimizer_choice=='SGD':
-            #TODO write code for batch size SGD
-        else:
             net.train()
-            loss = closure()
+            
+            # Shuffle training observations
+            indices = torch.randperm(X_train.shape[0], device=X_train.device)
+
+            for start in range(0, X_train.shape[0], batch_size):
+                batch_indices = indices[start:start + batch_size]
+
+                X_batch = X_train[batch_indices]
+                Y_batch = Y_train[batch_indices]
+
+                loss = closure(X_batch, Y_batch)
+
+                torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+                optimizer.step()
+
+            scheduler.step()
+            val_loss = validation()
+        else: #full batch training
+            net.train()
+            loss = closure(X_train,Y_train)
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
@@ -459,9 +476,9 @@ if __name__ == "__main__":
     from target_fn_attention import iter_target_functions_attention,make_target_fn_attention
     jsonl_path ="intresting_function_attention.jsonl"
     datasets=[Path("generated_datasets/datasets/score_47.77.pt")]
-    for score, target_params,_,_ in iter_target_functions_attention(jsonl_path):
+    for score, target_params in iter_target_functions_attention(jsonl_path):
         target_function=make_target_fn_attention(**target_params)
-        dataset_path=Path(f'generated_datasets/datasets/score_{score}.pt')
+        dataset_path=Path(f'generated_datasets/datasets/score_{score:2f}.pt')
         datas,hyperparams=load_dataset(dataset_path)
         for hidden_dim in [10,12,14,16,18,20]:# this order because in the code, we modifty target_params @ section 7 saving config
             for epoch in [60000]:
@@ -479,7 +496,7 @@ if __name__ == "__main__":
                                 x_range=hyperparams['x_range'],
                                 noise_std=0.0,
                                 init_scale=1.0,
-                                inti_scheme='uniform_bias',
+                                init_scheme='uniform_bias',
                                 lr=1e-3,
                                 batch_size=32,
                                 timestamp=timestamp,
@@ -489,7 +506,7 @@ if __name__ == "__main__":
                                 target_param=target_params,
                                 dataset_path=dataset_path.name,
                                 optimizer_choice='Adam',
-                                out_root="reg_experiments_attention_randomsampling",
+                                out_root="reg_experiments_attention_new",
                                 score=score,
                                 rho=LinearFeatureAttention
                                 )
