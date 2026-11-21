@@ -198,10 +198,10 @@ def train_network(
         net.zero_grad()   # leave state clean — this is a pure read, not a training step
 
         return norm, normalized_norm, max_component, min_component
-    def closure():
+    def closure(X_batch,Y_batch):
             optimizer.zero_grad()
-            pred=net(X_train)
-            loss=loss_fn(pred,Y_train)
+            pred=net(X_batch)
+            loss=loss_fn(pred,Y_batch)
             loss.backward()
             return loss
     def validation():
@@ -227,10 +227,28 @@ def train_network(
 
     for _ in range(epochs):
         if optimizer_choice=='SGD':
-             #TODO write code for SGD if need opti is SGD
+            net.train()
+
+            # Shuffle training observations
+            indices = torch.randperm(X_train.shape[0], device=X_train.device)
+
+            for start in range(0, X_train.shape[0], batch_size):
+                batch_indices = indices[start:start + batch_size]
+
+                X_batch = X_train[batch_indices]
+                Y_batch = Y_train[batch_indices]
+
+                loss = closure(X_batch, Y_batch)
+
+                torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+                optimizer.step()
+
+            scheduler.step()
+            val_loss = validation()
+
         else:
             net.train()
-            loss = closure()
+            loss = closure(X_train,Y_train)
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
