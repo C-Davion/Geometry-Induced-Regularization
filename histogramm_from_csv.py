@@ -1,0 +1,95 @@
+
+import argparse
+import pandas as pd
+import matplotlib.pyplot as plt
+from compute_ranks import _read_df, _METHOD_SPECS
+
+
+def plot_histograms(df, bins=30, quantity='rank_full', output=None):
+
+    hidden_dims = sorted(df["hidden_dim"].unique())
+
+    colors = plt.cm.viridis(
+        [i / max(len(hidden_dims) - 1, 1) for i in range(len(hidden_dims))]
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: rank_full
+    data_rank = [
+        df.loc[df["hidden_dim"] == h, quantity].dropna()
+        for h in hidden_dims
+    ]
+
+    axes[0].hist(
+        data_rank,
+        bins=bins,
+        stacked=True,
+        color=colors,
+        label=[f"hidden_dim={h}" for h in hidden_dims],
+        alpha=0.8,
+    )
+    axes[0].set_title("A Critical point")
+    axes[0].set_xlabel("rank_full")
+    axes[0].set_ylabel("Count")
+    axes[0].legend()
+
+    # Right: init_rank_full
+    data_init = [
+        df.loc[df["hidden_dim"] == h, "init"+quantity].dropna()
+        for h in hidden_dims
+    ]
+
+    axes[1].hist(
+        data_init,
+        bins=bins,
+        stacked=True,
+        color=colors,
+        label=[f"hidden_dim={h}" for h in hidden_dims],
+        alpha=0.8,
+    )
+    axes[1].set_title("At initialisation")
+    axes[1].set_xlabel("init_rank_full")
+    axes[1].set_ylabel("Count")
+    axes[1].legend()
+
+    plt.tight_layout()
+    fig.suptitle(f"Histogramm of {quantity}")
+
+    if output:
+        plt.savefig(output, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Plot stacked rank histograms grouped by hidden_dim."
+    )
+
+    parser.add_argument("--input",type=str,required=True,help="Path to input CSV file.")
+
+    parser.add_argument("--bins",type=int,default=30,help="Number of histogram bins (default: 30).")
+
+    parser.add_argument("--output",type=str,default=None,help="Optional path to save the figure.")
+
+    parser.add_argument("--quantity",type=str, default='rank_full',choices=['rank_full','n_distinct','pattern_rank'],help='Y of the histogramm')
+
+    parser.add_argument("--rank_method",type=str,default='float64', help='rank_method used to generate the csv')
+    args = parser.parse_args()
+
+    df = _read_df(args.input)
+    suffix='' if args.rank_method=='float64' else args.rank_method
+    required_columns = {"hidden_dim", args.quantity, "init"+args.quantity+suffix,}
+    
+    missing = required_columns - set(df.columns)
+
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    suffix='' if args.rank_method=='float64' else args.rank_method
+
+    plot_histograms(df, bins=args.bins,quantity=args.quantity+suffix output=args.output)
+
+
+if __name__ == "__main__":
+    main()
