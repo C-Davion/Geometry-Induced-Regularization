@@ -7,10 +7,78 @@ import pandas as pd
 import argparse
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 PLOT_FIELDS=['rank_full','num_distinct_pat','pattern_rank'] 
 
 INIT_PLOT_FIELDS=['init_rank_full','init_num_distinct_pat','init_pattern_rank']
+
+#Colors and NAME
+COLOR_CRITICAL = "tab:blue"
+COLOR_INIT = "tab:orange"
+COLOR_TRAIN = "k"
+LABEL_OLD = "critical point"
+LABEL_NEW = "initialisation"
+# --- Legend -----------------------------------------------------------------
+# "shared_bottom" : 2 compact legends under all subplots (colour = series,
+#                   line style = statistic)  -> recommended for slides
+# "shared_top"    : same, above the subplots
+# "per_axes"      : one full legend inside each subplot (like your original)
+# "outside_right" : one legend column on the right of the figure
+LEGEND_MODE = "shared_bottom"
+LEGEND_FONTSIZE = 11
+LEGEND_NCOL_SERIES = 2             # columns of the "series" legend
+LEGEND_NCOL_STATS = 5              # columns of the "statistics" legend
+LEGEND_GAP = 0.02                  # horizontal gap between the 2 legends (fig. fraction)
+PER_AXES_LOC = ["lower right", "lower right", "upper left"]   # used in "per_axes"
+BOTTOM_MARGIN = 0.14               # room reserved for the shared legend
+
+def stat_handles(color="0.25"):
+    """Neutral handles explaining line styles (used by the shared legend)."""
+    return [
+        Line2D([], [], color=color, lw=1.8, marker="o", ms=5, label="median"),
+        Patch(facecolor=color, alpha=0.2, label="25-75%"),
+        Line2D([], [], color=color, ls="--", lw=1.2, label="min"),
+        Line2D([], [], color=color, ls=":", lw=1.2, label="max"),
+        Line2D([], [], color=COLOR_TRAIN, ls="--", lw=1.5, label="# training samples"),
+    ]
+
+
+def series_handles():
+    return [
+        Line2D([], [], color=COLOR_CRITICAL, lw=3, label=LABEL_OLD),
+        Line2D([], [], color=COLOR_INIT, lw=3, label=LABEL_NEW),
+    ]
+
+
+def add_legends(fig, axes):
+    fs = LEGEND_FONTSIZE
+    if LEGEND_MODE in ("shared_bottom", "shared_top"):
+        bottom = LEGEND_MODE == "shared_bottom"
+        y = 0.01 if bottom else 0.99
+        loc = "lower " if bottom else "upper "
+        # two legends side by side, centred as a block around x = 0.5
+        l1 = fig.legend(handles=series_handles(), ncol=LEGEND_NCOL_SERIES,
+                        loc=loc + "right", bbox_to_anchor=(0.5 - LEGEND_GAP / 2, y),
+                        fontsize=fs, title="Series", title_fontsize=fs,
+                        frameon=True)
+        fig.legend(handles=stat_handles(), ncol=LEGEND_NCOL_STATS,
+                   loc=loc + "left", bbox_to_anchor=(0.5 + LEGEND_GAP / 2, y),
+                   fontsize=fs, title="Statistics", title_fontsize=fs,
+                   frameon=True)
+    elif LEGEND_MODE == "per_axes":
+        for ax, loc in zip(axes, PER_AXES_LOC):
+            ax.legend(handles=series_handles() + stat_handles(), loc=loc,
+                      ncol=2, fontsize=fs - 3, framealpha=0.9, columnspacing=1.0)
+    elif LEGEND_MODE == "outside_right":
+        fig.legend(handles=series_handles() + stat_handles(), loc="center left",
+                   bbox_to_anchor=(0.985, 0.5), fontsize=fs, frameon=True)
+    else:
+        raise ValueError(f"Unknown LEGEND_MODE: {LEGEND_MODE}")
+
+
+
 
 
 def build_and_save_df_for_plot(base_dirs,patterns,random_sampling=False,init_scheme_filter='uniform',init_scale_filter=1.0,rank_method='float64'\
@@ -56,29 +124,29 @@ def plot(runs: pd.DataFrame=pd.DataFrame(), dataframe_path:str| None =None , tit
         lo_crit  = g[f+suffix].quantile(q_lo).values
         hi_crit  = g[f+suffix].quantile(q_hi).values
 
-        line, = ax.plot(n1, med_crit, "o-", label=label_crit + " (median)")
+        line, = ax.plot(n1, med_crit, "o-",color=COLOR_CRITICAL)#l,bel=label_crit + " (median)")
         c = line.get_color()
-        ax.fill_between(n1, lo_crit, hi_crit, color=c, alpha=0.2,
-                        label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
+        ax.fill_between(n1, lo_crit, hi_crit, color=c, alpha=0.2)
+                       # label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
 
         if show_minmax:
-            ax.plot(n1, g[f+suffix].min().values, "--", color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (min)")
-            ax.plot(n1, g[f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (max)")
+            ax.plot(n1, g[f+suffix].min().values, "--", color=c, lw=1, alpha=0.8)# label=labels[f+suffix] + " (min)")
+            ax.plot(n1, g[f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8)# label=labels[f+suffix] + " (max)")
         #PLOT INITIAL VALUES
         label_init = labels[f+suffix]
         med_init = g['init_'+f+suffix].median().values
         lo_init  = g['init_'+f+suffix].quantile(q_lo).values
         hi_init  = g['init_'+f+suffix].quantile(q_hi).values
 
-        line, = ax.plot(n1, med_init, "o-", label=label_init + " (median)")
+        line, = ax.plot(n1, med_init,"o-",color=COLOR_INIT,)#label=label_init + " (median)")
         c = line.get_color()
-        ax.fill_between(n1, lo_init, hi_init, color=c, alpha=0.2,
-                        label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
+        ax.fill_between(n1, lo_init, hi_init, color=c, alpha=0.2)
+                        #label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
 
         if show_minmax:
-            ax.plot(n1, g['init_'+f+suffix].min().values, "--", color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (min)")
-            ax.plot(n1, g['init_'+f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (max)")
-        ax.axhline(y = 160, color = 'b', linestyle='--',label='# training samples')
+            ax.plot(n1, g['init_'+f+suffix].min().values, "--", color=c, lw=1, alpha=0.8)# label=labels[f+suffix] + " (min)")
+            ax.plot(n1, g['init_'+f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8) #label=labels[f+suffix] + " (max)")
+        ax.axhline(y = 160, color = 'b', linestyle='--')#label='# training samples')
         ax.set_xlabel(r"$n_1$")
         ax.set_ylabel("value")
         ax.grid(alpha=0.3)
@@ -87,7 +155,8 @@ def plot(runs: pd.DataFrame=pd.DataFrame(), dataframe_path:str| None =None , tit
         if logx:
             ax.set_xscale("log")
     fig.suptitle(title)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, BOTTOM_MARGIN, 1, 1))
+    add_legends(fig,ax)
     return fig, ax
 
 def main():
