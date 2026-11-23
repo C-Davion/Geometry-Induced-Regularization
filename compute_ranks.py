@@ -30,7 +30,7 @@ Usage (command line):
     python jacobian_ranks_2d.py --df runs.pkl --out runs_with_ranks.pkl
 '''
 import torch
-from torch.func import functional_call, jacrev
+from torch.func import functional_call, jacrev,vmap
 import argparse
 import copy
 import time
@@ -230,7 +230,7 @@ def _resolve_dataset_path(dataset_path, run_dir):
     p = Path(dataset_path)
     if p.exists() or p.is_absolute():
         return p
-    q = Path(run_dir) / p
+    q = Path('generated_datasets')/'datasets' / p
     return q if q.exists() else p
 
 
@@ -268,7 +268,7 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
     device      : "cpu" by default (a float64 Jacobian of this size is cheap on CPU)
     """
     if rank_method not in _METHOD_SPECS:
-        raise ValueError(f"method must be one of {list(_METHOD_SPECS)}, got {method!r}")
+        raise ValueError(f"method must be one of {list(_METHOD_SPECS)}, got {rank_method!r}")
     suffix = "" if rank_method == "float64" else f"_{rank_method}"
     prefix="" if not compute_initial else "init_"
     stable = _METHOD_SPECS[rank_method][2]

@@ -51,7 +51,7 @@ def load_filtered_runs(base_dir=BASE_DIR, folder_pattern=FOLDER_PATTERN,
     init_schemes={
         "uniform": "weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal", #1.0 3.0 6.0
         "normal": "weight:he_normal,bias:normal,Attention:xavier_normal,embedding:normal" , #TEMP #3.0
-        "uniform_bias":"weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal, embedding_bias:normal" #1.0 6.0
+        "uniform_bias":"weight:he_uniform,bias:uniform,Attention:xavier_uniform,embedding:normal,embedding_bias:normal" #1.0 6.0
     } 
 
     if verbose:

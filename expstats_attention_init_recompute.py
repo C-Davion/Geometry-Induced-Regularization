@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 
 PLOT_FIELDS=['rank_full','num_distinct_pat','pattern_rank'] 
 
-
+INIT_PLOT_FIELDS=['init_rank_full','init_num_distinct_pat','init_pattern_rank']
 
 
 def build_and_save_df_for_plot(base_dirs,patterns,random_sampling=False,init_scheme_filter='uniform',init_scale_filter=1.0,rank_method='float64'\
@@ -31,7 +31,7 @@ def aggregate(runs:pd.DataFrame, fields=PLOT_FIELDS):
 
 
 
-def plot(runs: pd.DataFrame=pd.DataFrame(), dataframe_path:Path| None =None , title='Quantities as a function of n_1', fields=PLOT_FIELDS, logx=False, figsize=(10, 5),
+def plot(runs: pd.DataFrame=pd.DataFrame(), dataframe_path:str| None =None , title='Quantities as a function of n_1', rank_method: str='float64', fields=PLOT_FIELDS, logx=False,
              q=(0.25, 0.75), show_minmax=True):
     if runs.empty:
         if dataframe_path is None:
@@ -39,30 +39,45 @@ def plot(runs: pd.DataFrame=pd.DataFrame(), dataframe_path:Path| None =None , ti
         else:
             runs=_read_df(dataframe_path)
 
-    
+    suffix = "" if rank_method == "float64" else f"_{rank_method}"
     fig, axes = plt.subplots(1, len(fields), figsize=(6 * len(fields), 4))
     axes = np.atleast_1d(axes)
-    labels={'jac_rank_at_min_grad_norm': rf"$\mathrm{{rank}}\mathbf{{D}}f(\theta,X)$",
-            'p_rank_at_min_grad_norm':rf"$\mathrm{{rank}}(D)$",
-            'ndistinct_pattern_at_min_grad_norm':rf"$|\mathcal{{A}}(\theta,X)|$"}
-    g = runs.groupby("n_1")
+    labels={'rank_full'+suffix: rf"$\mathrm{{rank}}\mathbf{{D}}f(\theta,X)$",
+            'pattern_rank'+suffix:rf"$\mathrm{{rank}}(D)$",
+            'num_distinct_pat'+suffix:rf"$|\mathcal{{A}}(\theta,X)|$"}
+    g = runs.groupby("hidden_dim")
     n1 = g.size().index.values
     q_lo, q_hi = q
 
     for ax, f in zip(axes, fields):
-        label = labels[f]
-        med = g[f].median().values
-        lo  = g[f].quantile(q_lo).values
-        hi  = g[f].quantile(q_hi).values
+        #PLOT CRITICAL POINT
+        label_crit = labels[f+suffix]
+        med_crit = g[f+suffix].median().values
+        lo_crit  = g[f+suffix].quantile(q_lo).values
+        hi_crit  = g[f+suffix].quantile(q_hi).values
 
-        line, = ax.plot(n1, med, "o-", label=label + " (median)")
+        line, = ax.plot(n1, med_crit, "o-", label=label_crit + " (median)")
         c = line.get_color()
-        ax.fill_between(n1, lo, hi, color=c, alpha=0.2,
-                        label=labels[f] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
+        ax.fill_between(n1, lo_crit, hi_crit, color=c, alpha=0.2,
+                        label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
 
         if show_minmax:
-            ax.plot(n1, g[f].min().values, "--", color=c, lw=1, alpha=0.8, label=labels[f] + " (min)")
-            ax.plot(n1, g[f].max().values, ":",  color=c, lw=1, alpha=0.8, label=labels[f] + " (max)")
+            ax.plot(n1, g[f+suffix].min().values, "--", color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (min)")
+            ax.plot(n1, g[f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (max)")
+        #PLOT INITIAL VALUES
+        label_init = labels[f+suffix]
+        med_init = g['init_'+f+suffix].median().values
+        lo_init  = g['init_'+f+suffix].quantile(q_lo).values
+        hi_init  = g['init_'+f+suffix].quantile(q_hi).values
+
+        line, = ax.plot(n1, med_init, "o-", label=label_init + " (median)")
+        c = line.get_color()
+        ax.fill_between(n1, lo_init, hi_init, color=c, alpha=0.2,
+                        label=labels[f+suffix] + f" ({int(q_lo*100)}-{int(q_hi*100)}%)")
+
+        if show_minmax:
+            ax.plot(n1, g['init_'+f+suffix].min().values, "--", color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (min)")
+            ax.plot(n1, g['init_'+f+suffix].max().values, ":",  color=c, lw=1, alpha=0.8, label=labels[f+suffix] + " (max)")
         ax.axhline(y = 160, color = 'b', linestyle='--',label='# training samples')
         ax.set_xlabel(r"$n_1$")
         ax.set_ylabel("value")
@@ -87,7 +102,7 @@ def main():
 
     parser.add_argument("--random_sampling",action="store_true",help="Filters the runs issued of random sampling")
 
-    parser.add_argument("--init_scheme_filter",type=str,default="uniform")
+    parser.add_argument("--init_scheme_filter",type=str,default="uniform_bias")
 
     parser.add_argument("--init_scale_filter",type=float,default=1.0)
 
@@ -102,6 +117,8 @@ def main():
 
     parser.add_argument("--dataframe_path",type=str,default=None,help="Path to the already computed dataframe")
 
+    #ADD PLOT ARGS
+
     args = parser.parse_args()
 
     if args.from_scratch:
@@ -113,11 +130,13 @@ def main():
             rank_method=args.rank_method,verbose=args.verbose,out_path=args.out_path,)
 
     else:
+       
         runs=_read_df(args.dataframe_path)
 
     #code to plot
     print(runs.columns)
-
+    fig,ax=plot(runs,rank_method=args.rank_method)
+    plt.show()
 
 if __name__ == "__main__":
     # '''

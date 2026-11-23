@@ -5,6 +5,7 @@ reg_experiments_attention/
 reg_experiments_attention_init/
 reg_experiments/
 reg_experiments_randomsampling/
+reg_experiments_new/
 cluster_plots/
 cluster_plot_attention/
 __pycache__
