@@ -47,10 +47,10 @@ RHO_PREFIX = "rho."      # named_parameters(): "rho.E", "rho.B", "rho.attention.
 
 _METHOD_SPECS = {
     # method:        (dtype,          rtol,       stable)
-    "float32":       (torch.float32,  None,       False),
-    "float32_rtol":  (torch.float32,  2.0 ** -37, False),
-    "float64":       (torch.float64,  None,       False),
+    "float64":       (torch.float64,  None,       False), #n_1=10 rtol=2e-13,n_1=100 rtol=2e-11
     "stable_rank":   (torch.float64,  None,       True),
+    "float641e-10":  (torch.float64, 1e-10,      False),
+    "float641e-6":   (torch.float64,1e-6,        False)
 }
 Keys = Union[str, Sequence[str]]
 

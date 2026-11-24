@@ -1,5 +1,5 @@
 from loadrun import gather_runs
-from compute_ranks import add_jacobian_ranks, _write_df
+from compute_ranks import add_jacobian_ranks, _write_df,_METHOD_SPECS
 from pathlib import Path
 
 import pandas as pd
@@ -35,7 +35,7 @@ def main():
 
     parser.add_argument("--init_scale_filter",type=float,default=1.0)
 
-    parser.add_argument("--rank_method",type=str,choices=["float64", "float32", "float32_rtol", "stable_rank"],default="float64")
+    parser.add_argument("--rank_method",type=str,choices=list(_METHOD_SPECS.keys()),default="float64")
 
     parser.add_argument("--verbose",action=argparse.BooleanOptionalAction,default=True)
 
