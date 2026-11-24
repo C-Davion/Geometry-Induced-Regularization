@@ -39,7 +39,7 @@ def main():
 
     parser.add_argument("--verbose",action=argparse.BooleanOptionalAction,default=True)
 
-    parser.add_argument("--out_path",type=str,default="exp_run.csv")
+    parser.add_argument("--out_path",type=str,default="exp_run.csv",help="name of the output path, need to add .csv")
 
     args=parser.parse_args()
 

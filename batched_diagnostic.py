@@ -43,7 +43,7 @@ def list_run_folders(base_dir: str):#  Add the folder patterns as args?
     random_sampling=False
     runs=[]
     """Sub-folders of base_dir that contain a model_weights.pt."""
-    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_47.77_*',random_sampling=random_sampling,init_scheme_filter='uniform',
+    runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_47.77_*',random_sampling=random_sampling,init_scheme_filter='uniform_bias',
                                init_scale_filter=1.0,verbose=True))
     runs.append(gather_runs(base_dirs=base_dir,folder_patterns='run_47.77_*',random_sampling=random_sampling,init_scheme_filter='uniform_bias',
                                init_scale_filter=4.5,verbose=True))

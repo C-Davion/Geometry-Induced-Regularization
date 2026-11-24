@@ -14,7 +14,7 @@ from torch.func import functional_call, jacrev
 #import matplotlib.pyplot as plt
 #import time
 from relu_network import OneHiddenLayerReLUNet, QuadraticFeatureMap
-from data_generation import generate_dataset,train_val_split
+import numpy as np
 import math
 #import copy
 from contextlib import contextmanager
@@ -328,6 +328,7 @@ def init_rho_(rho, attn_scheme, E_dist, B_dist, scale):
         mha.out_proj.bias.zero_()
 #### For parallel script, resovling folder name race (train attention_SGD_para)
 
+
 def make_run_dir(out_root, prefix, run_id):
     """Atomic, race-free: run_id makes names unique across parallel tasks;
     the _vN suffix only kicks in if you re-run the same run_id on the same day."""
@@ -363,3 +364,61 @@ def load_dataset(dataset_path):
     
 
     return (X_train, Y_train, X_val, Y_val),data
+
+
+def _lower_from_pattern(pattern, W2, w2_tol=0.0):
+    """
+    Pure-numpy core of lower.
+
+    pattern: (n_samples, hidden_dim) 0/1 activation matrix
+    W2:      (output_dim, hidden_dim) output weights
+
+    1. Remove duplicate rows of `pattern`            -> D
+    2. A = hidden units with a non-zero output weight (|W2| > w2_tol for
+       at least one output)
+    3. lower = rank of D restricted to the columns in A
+
+    Returns (lower, n_distinct_patterns) where n_distinct_patterns = D.shape[0].
+    """
+    P = np.asarray(pattern).astype(np.int64)
+    D = np.unique(P, axis=0)
+    lower=0
+    W2 = np.atleast_2d(np.asarray(W2))
+    for k in range(W2.shape[0]):
+        A = np.where(np.any(np.abs(W2[k,:]) > w2_tol, axis=0))[0]
+
+        if len(A) > 0:
+            lower += int(np.linalg.matrix_rank(D[:, A].astype(np.float64))) #(160 x n_1) matrix, so is stable.
+        else:
+            lower+=0
+    return lower, D.shape[0]
+
+
+def compute_lower(model, X,lower_mode, device='cpu', w2_tol=0.0,):
+    """
+    lower for one trained network: activation patterns of `model` on the
+    training inputs X (see _lower_from_pattern for the definition).
+
+    Returns (lower, n_distinct_patterns).
+    """
+    with torch.no_grad():
+        pattern = model.activation_pattern(X.to(device))
+    pattern = (pattern > 0).cpu().numpy()
+    W2 = model.W2.detach().cpu().numpy()
+    lower, Card_A=_lower_from_pattern(pattern, W2, w2_tol=w2_tol)
+    return lower if lower_mode=='p_rank' else W2.shape[0]*np.ceil(np.log2(Card_A))
+
+
+def compute_upper(output_dim, seq_len, embed_dim, pattern_count, rho,upper_mode,X_train,keep_feature=True):
+    """
+    upper = output_dim * (seq_len * embed_dim + 1) * pattern_count + min(# parameters in rho, number of training samples)
+
+    i.e. n_2 * (n_0 + 1) * pattern_count + min (n_f,n), with pattern_count being
+    2*p_rank (rank of the pattern matrix) or n_distinct (number of distinct
+    patterns, |A(theta, X)|) — see compute_rank_ratio_table's upper_mode.
+
+    keep_feature=True: add the constant n_f, if False, drop it
+    """
+    n_rho_params = sum(p.numel() for p in rho.parameters()) if keep_feature else 0
+    return output_dim * (seq_len * embed_dim + 1) * pattern_count + min(n_rho_params,X_train.shape[0]) if upper_mode=="n_distinct" else \
+        output_dim * (2*(seq_len * embed_dim + 1) * pattern_count+1) + min(n_rho_params,X_train.shape[0])
