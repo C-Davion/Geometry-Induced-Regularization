@@ -22,7 +22,7 @@ def plot_histograms(df, bins=30, quantity='rank_full', x_label='rank', output=No
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Left: rank_full
+    # Left: at critical
     data_rank = [
         df.loc[df["hidden_dim"] == h, quantity].dropna()
         for h in hidden_dims
@@ -41,7 +41,7 @@ def plot_histograms(df, bins=30, quantity='rank_full', x_label='rank', output=No
     axes[0].set_ylabel("Count")
     axes[0].legend()
 
-    # Right: init_rank_full
+    # Right: at initialisation
     data_init = [
         df.loc[df["hidden_dim"] == h, "init"+quantity].dropna()
         for h in hidden_dims
@@ -82,12 +82,13 @@ def main():
 
     parser.add_argument("--quantity",type=str, default='rank_full',choices=['rank_full','n_distinct','pattern_rank'],help='which quantity to plot the histogramm')
 
-    parser.add_argument("--rank_method",type=str,default='float64', help='rank_method used to generate the csv')
+    parser.add_argument("--rank_method",type=str,default=None, help='rank_method used to generate the csv, if none infered from input path')
     args = parser.parse_args()
 
     df = _read_df(args.input)
-    suffix='' if args.rank_method=='float64' else args.rank_method
-    required_columns = {"hidden_dim", args.quantity, "init"+args.quantity+suffix,}
+    rank_method=(args.dataframe_path.split('__')[-1]).split('.')[0] if args.rank_method is None else args.rank_method
+    suffix='' if rank_method=='float64' else rank_method
+    required_columns = {"hidden_dim", args.quantity+suffix, "init"+args.quantity+suffix,}
     
     missing = required_columns - set(df.columns)
 

@@ -12,7 +12,8 @@ def build_and_save_df_for_plot(base_dirs,patterns,random_sampling=False,init_sch
     runs=gather_runs(base_dirs,patterns,random_sampling=random_sampling,init_scale_filter=init_scale_filter,init_scheme_filter=init_scheme_filter,verbose=verbose)
     runs=add_jacobian_ranks(runs,folder_col='run',base_dir_col='base_dir',weights_col='weight_path',rank_method=rank_method,device='cpu',)
     runs = add_jacobian_ranks(runs, folder_col='run',base_dir_col='base_dir',weights_col='init_weight_path',rank_method=rank_method,device='cpu',compute_initial=True)
-    out_path=out_path+'__'+rank_method
+    out_path=out_path.split('.')[0]
+    out_path=out_path+'__'+rank_method+'.csv'
     _write_df(runs,out_path)
     return runs
 

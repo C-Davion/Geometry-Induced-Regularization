@@ -170,7 +170,7 @@ def main():
 
     parser.add_argument("--dataframe_path",type=str,default=None,help="Path to the already computed dataframe")
 
-    parser.add_argument("--rank_method",type=str,default=None, help='arnk_method. If not passed, infered from the dataframe args. Needs to be consistent')
+    parser.add_argument("--rank_method",type=str,default=None, help='rankk_method. If not passed, infered from the dataframe args. Needs to be consistent')
 
     parser.add_argument("--show_min_max",action=argparse.BooleanOptionalAction,default=True, help='also plot the curves of min and max values')
 
@@ -179,11 +179,11 @@ def main():
     args = parser.parse_args()
    
     runs=_read_df(args.dataframe_path)
-    rank_method=args.dataframe_path.split('__')[-1] if args.rank_method is None else args.rank_method
+    rank_method=(args.dataframe_path.split('__')[-1]).split('.')[0] if args.rank_method is None else args.rank_method
 
     #code to plot
     print(runs.columns)
-    fig,ax=plot(runs,rank_method=args.rank_method,show_minmax=args.show_min_max,title=args.suptitle)
+    fig,ax=plot(runs,rank_method=rank_method,show_minmax=args.show_min_max,title=args.suptitle)
     plt.show()
 
 if __name__ == "__main__":
