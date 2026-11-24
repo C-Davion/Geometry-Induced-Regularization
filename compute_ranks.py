@@ -225,7 +225,7 @@ def jacobian(
 # Training inputs
 # ============================================================
 
-def _resolve_dataset_path(dataset_path, run_dir):
+def _resolve_dataset_path(dataset_path):
     """The path as given; if it does not exist and is relative, also try it relative to the run folder."""
     p = Path(dataset_path)
     if p.exists() or p.is_absolute():
