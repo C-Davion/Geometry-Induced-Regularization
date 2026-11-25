@@ -28,7 +28,21 @@ Usage (in a session):
     df = add_jacobian_ranks(df, folder_col="run_folder", weights_col="weights_path")
 Usage (command line):
     python jacobian_ranks_2d.py --df runs.pkl --out runs_with_ranks.pkl
+Add
+Diagnostic for rank_rho > rank_full type inconsistencies.
+ 
+    from rank_diagnostic import rank_spectra
+    res = jacobian(net, X, rank_method="float64", device="cpu", eval_mode=False)
+    rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX)
+ 
+It computes the singular values of J_full, J_rho, J_rest, then shows them on a log scale together
+with
+  * each matrix's OWN threshold  max(m, n) * eps * sigma_max(matrix)   (what the rank code uses),
+  * ONE COMMON threshold         max(m, n) * eps * sigma_max(full)     (guarantees rank_rho <= rank_full).
 '''
+
+
+
 import torch
 from torch.func import functional_call, jacrev,vmap
 import argparse
@@ -42,7 +56,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from buildnetwork import build_network, load_run_config, DEFAULT_DATASET_PATH
-from helper import pattern_stats, compute_lower
+from helper import pattern_stats, rank_spectra
 RHO_PREFIX = "rho."      # named_parameters(): "rho.E", "rho.B", "rho.attention.*"
 
 _METHOD_SPECS = {
@@ -234,9 +248,9 @@ def _resolve_dataset_path(dataset_path):
     return q if q.exists() else p
 
 
-def _load_X_train(dataset_path, cache):
+def _load_X_train(dataset_path, run_dir, cache):
     """X_train from the dataset .pt (cached: many runs share the same dataset)."""
-    p = _resolve_dataset_path(dataset_path)
+    p = _resolve_dataset_path(dataset_path, run_dir)
     key = str(p)
     if key not in cache:
         data = torch.load(p, map_location="cpu", weights_only=True)
@@ -249,7 +263,7 @@ def _load_X_train(dataset_path, cache):
 
 def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', weights_col="weight_path",
                        rank_method="float64", device="cpu", dataset_key="dataset_path", compute_initial=False,
-                       default_dataset_path=DEFAULT_DATASET_PATH, verbose_every=25):
+                       default_dataset_path=DEFAULT_DATASET_PATH, verbose_every=25,diagnostic=False):
     """
     Add Jacobian-rank columns to `df` (in place; `df` is also returned):
 
@@ -282,25 +296,27 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
         try:
             config = load_run_config(run_dir)
             dataset_path = config.get(dataset_key, default_dataset_path)
-            X_train = _load_X_train(dataset_path, cache)
+            X_train = _load_X_train(dataset_path, run_dir, cache)
             net = build_network(row[weights_col], device=device)
             pattern_rank,n_distinct=pattern_stats(net,X_train)
-            lower_prank=compute_lower(net,X_train,lower_mode='p_rank',device=device)
-            lower_ndistinct=compute_lower(net,X_train,lower_mode='n_distinct',device=device)
-            res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)["ranks"]
-            res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]),lower_prank=lower_prank,lower_ndistinct=lower_ndistinct, rank_error=None)
-            print(res)
+            if not diagnostic:
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)["ranks"]
+                res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
+                print('is computing initial', compute_initial,res)
+            else:
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)
+                rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX, show=True)
+                res=res["ranks"]
         except Exception as e:                                   # keep going on a bad row
             print(f"[{k}/{n_rows}] {run_dir.name}: FAILED ({type(e).__name__}: {e})")
             res = {"rank_full": None, "rank_rho": None, "rank_rest": None, "num_distinct_pat": None, "pattern_rank": None,
-                   'lower_prank':None,'lower_ndistinct':None,
                    "n_train": None, "rank_error": f"{type(e).__name__}: {e}"}
         results.append(res)
 
         if verbose_every and k % verbose_every == 0:
             print(f"[{k}/{n_rows}] {time.time() - t0:.0f}s elapsed")
 
-    for name in ("rank_full", "rank_rho", "rank_rest","num_distinct_pat","pattern_rank", 'lower_prank', 'lower_ndistinct'):
+    for name in ("rank_full", "rank_rho", "rank_rest","num_distinct_pat","pattern_rank"):
         values = [r[name] for r in results]
         df[prefix+name + suffix] = (pd.Series(values, index=df.index, dtype="float64") if stable
                              else pd.Series(values, index=df.index, dtype="Int64"))

@@ -8,10 +8,10 @@ import argparse
 
 
 def build_and_save_df_for_plot(base_dirs,patterns,random_sampling=False,init_scheme_filter='uniform',init_scale_filter=1.0,rank_method='float64'\
-                                        ,verbose=True,out_path='exp_run.csv'):
+                                        ,verbose=True,diagnostic=False,out_path='exp_run.csv'):
     runs=gather_runs(base_dirs,patterns,random_sampling=random_sampling,init_scale_filter=init_scale_filter,init_scheme_filter=init_scheme_filter,verbose=verbose)
-    runs=add_jacobian_ranks(runs,folder_col='run',base_dir_col='base_dir',weights_col='weight_path',rank_method=rank_method,device='cpu',)
-    runs = add_jacobian_ranks(runs, folder_col='run',base_dir_col='base_dir',weights_col='init_weight_path',rank_method=rank_method,device='cpu',compute_initial=True)
+    runs=add_jacobian_ranks(runs,folder_col='run',base_dir_col='base_dir',weights_col='weight_path',rank_method=rank_method,device='cpu',diagnostic=diagnostic)
+    #runs = add_jacobian_ranks(runs, folder_col='run',base_dir_col='base_dir',weights_col='init_weight_path',rank_method=rank_method,device='cpu',compute_initial=True)
     out_path=out_path.split('.')[0]
     out_path=out_path+'__'+rank_method+'.csv'
     _write_df(runs,out_path)
@@ -39,6 +39,8 @@ def main():
 
     parser.add_argument("--verbose",action=argparse.BooleanOptionalAction,default=True)
 
+    parser.add_argument("--diagnostic",action=argparse.BooleanOptionalAction,default=False)
+
     parser.add_argument("--out_path",type=str,default="exp_run.csv",help="name of the output path, need to add .csv")
 
     args=parser.parse_args()
@@ -47,7 +49,7 @@ def main():
 
     runs=build_and_save_df_for_plot(base_dirs=args.base_dirs,patterns=patterns,random_sampling=args.random_sampling,
         init_scheme_filter=args.init_scheme_filter,init_scale_filter=args.init_scale_filter,
-        rank_method=args.rank_method,verbose=args.verbose,out_path=args.out_path,)
+        rank_method=args.rank_method,verbose=args.verbose,diagnostic=args.diagnostic,out_path=args.out_path,)
     print(runs.columns)
     print('Succesfully generated')
 if __name__=='__main__':
