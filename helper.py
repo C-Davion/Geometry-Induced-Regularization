@@ -11,9 +11,9 @@ from typing import Callable, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.func import functional_call, jacrev
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 #import time
-from relu_network import OneHiddenLayerReLUNet, QuadraticFeatureMap
+from relu_network import OneHiddenLayerReLUNet
 import numpy as np
 import math
 #import copy
@@ -422,3 +422,58 @@ def compute_upper(output_dim, seq_len, embed_dim, pattern_count, rho,upper_mode,
     n_rho_params = sum(p.numel() for p in rho.parameters()) if keep_feature else 0
     return output_dim * (seq_len * embed_dim + 1) * pattern_count + min(n_rho_params,X_train.shape[0]) if upper_mode=="n_distinct" else \
         output_dim * (2*(seq_len * embed_dim + 1) * pattern_count+1) + min(n_rho_params,X_train.shape[0])
+
+def rank_spectra(J, layout, rho_prefix="rho.", window=8, save=None, show=True):
+    M = J.detach().cpu().numpy() if isinstance(J, torch.Tensor) else np.asarray(J)
+ 
+    rho_idx = np.concatenate([np.arange(a, b) for k, (a, b) in layout.items() if k.startswith(rho_prefix)]
+                             or [np.empty(0, dtype=int)])
+    rest_idx = np.setdiff1d(np.arange(M.shape[1]), rho_idx)
+    subs = {"full": M}
+    if rho_idx.size:
+        subs["rho"] = M[:, rho_idx]
+    if rest_idx.size:
+        subs["rest"] = M[:, rest_idx]
+ 
+    sv = {k: np.linalg.svd(A, compute_uv=False) for k, A in subs.items()}
+    eps = np.finfo(M.dtype).eps
+    tol_common = max(M.shape) * eps * sv["full"][0]                    # absolute value
+    tol_own = {k: max(A.shape) * eps * sv[k][0] for k, A in subs.items()}  # absolute values
+    rank_own = {k: int((sv[k] > tol_own[k]).sum()) for k in subs}
+    rank_common = {k: int((sv[k] > tol_common).sum()) for k in subs}
+ 
+    print(f"{'':5s} {'own-tol rank':>13s} {'common-tol rank':>16s} {'sigma_max':>11s} {'own tol':>10s}")
+    for k in subs:
+        print(f"{k:5s} {rank_own[k]:13d} {rank_common[k]:16d} {sv[k][0]:11.2e} {tol_own[k]:10.2e}")
+    print(f"common tolerance = {tol_common:.2e}")
+ 
+    # zoom window derived from the ranks (not hard-coded)
+    r_all = list(rank_own.values()) + list(rank_common.values())
+    lo = max(0, min(r_all) - window)
+    hi = min(max(len(s) for s in sv.values()), max(r_all) + window)  # shorter spectra are cut by slicing
+    for k in subs:  # printed window: around this matrix's own ranks
+        a = max(0, min(rank_own[k], rank_common[k]) - window)
+        b = max(rank_own[k], rank_common[k]) + window
+        print(f"{k:5s} s[{a}:{b}] =", np.array2string(sv[k][a:b], precision=2))
+ 
+    colors = {"full": "tab:blue", "rho": "tab:orange", "rest": "tab:green"}
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, zoom in zip(axes, (False, True)):
+        for k, s in sv.items():
+            idx = np.arange(len(s))
+            sl = slice(lo, hi) if zoom else slice(None)
+            ax.semilogy(idx[sl], s[sl], ".-" if zoom else "-", color=colors[k],
+                        label=f"{k} (own-tol rank {rank_own[k]})")
+            ax.axhline(tol_own[k], color=colors[k], ls="--", lw=1)
+        ax.axhline(tol_common, color="k", ls=":", lw=1.5, label="common tolerance")
+        ax.set_xlabel("index k"); ax.set_ylabel(r"$\sigma_k$")
+        ax.set_title("zoom around the ranks" if zoom else "full spectrum")
+        ax.grid(alpha=0.3, which="both")
+    axes[0].legend(fontsize=8)
+    fig.suptitle("Singular values (solid), own thresholds (dashed), common threshold (dotted)", fontsize=10)
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=150)
+    if show:
+        plt.show()
+    return {"rank_own": rank_own, "rank_common": rank_common, "tol_own": tol_own, "tol_common": tol_common}

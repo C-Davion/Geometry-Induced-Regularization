@@ -1,13 +1,9 @@
 #Ignore the logs folders
 
-reg_experiments_attention_SGD/
-reg_experiments_attention/
-reg_experiments_attention_init/
-reg_experiments/
-reg_experiments_randomsampling/
-reg_experiments_new/
+reg_*/
 cluster_plots/
 cluster_plot_attention/
+images/
 __pycache__
 .vscode
 img/

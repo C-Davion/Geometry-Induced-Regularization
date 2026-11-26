@@ -63,9 +63,9 @@ _METHOD_SPECS = {
     # method:        (dtype,          rtol,       stable)
     "float64":       (torch.float64,  None,       False), #n_1=10 rtol=2e-13,n_1=100 rtol=2e-11
     "stable_rank":   (torch.float64,  None,       True),
-    "float641e-10":  (torch.float64, 1e-10,      False),
+    "float641e-10":  (torch.float64, 1e-10,      False), #use this one maybe to 1e-11
     "float641e-6":   (torch.float64,1e-6,        False)
-}
+} 
 Keys = Union[str, Sequence[str]]
 
 # ============================================================
@@ -248,9 +248,9 @@ def _resolve_dataset_path(dataset_path):
     return q if q.exists() else p
 
 
-def _load_X_train(dataset_path, run_dir, cache):
+def _load_X_train(dataset_path, cache):
     """X_train from the dataset .pt (cached: many runs share the same dataset)."""
-    p = _resolve_dataset_path(dataset_path, run_dir)
+    p = _resolve_dataset_path(dataset_path)
     key = str(p)
     if key not in cache:
         data = torch.load(p, map_location="cpu", weights_only=True)
@@ -296,17 +296,19 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
         try:
             config = load_run_config(run_dir)
             dataset_path = config.get(dataset_key, default_dataset_path)
-            X_train = _load_X_train(dataset_path, run_dir, cache)
+            X_train = _load_X_train(dataset_path, cache)
             net = build_network(row[weights_col], device=device)
             pattern_rank,n_distinct=pattern_stats(net,X_train)
             if not diagnostic:
                 res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)["ranks"]
                 res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
                 print('is computing initial', compute_initial,res)
-            else:
-                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)
+            else: #for diagnostic the thresolds, so we also output the jacobian
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=True,eval_mode=True)
                 rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX, show=True)
                 res=res["ranks"]
+                res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
+                print('is computing initial', compute_initial,res)
         except Exception as e:                                   # keep going on a bad row
             print(f"[{k}/{n_rows}] {run_dir.name}: FAILED ({type(e).__name__}: {e})")
             res = {"rank_full": None, "rank_rho": None, "rank_rest": None, "num_distinct_pat": None, "pattern_rank": None,
