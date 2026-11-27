@@ -6,11 +6,11 @@ and plots the histogramm of the chosen quantity, passed as args with respect to 
 
 
 
+
+from compute_ranks import _read_df, _METHOD_SPECS
 import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
-from compute_ranks import _read_df, _METHOD_SPECS
-
 
 def plot_histograms(df, bins=30, quantity='rank_full', x_label='rank', output=None):
 
@@ -43,7 +43,7 @@ def plot_histograms(df, bins=30, quantity='rank_full', x_label='rank', output=No
 
     # Right: at initialisation
     data_init = [
-        df.loc[df["hidden_dim"] == h, "init"+quantity].dropna()
+        df.loc[df["hidden_dim"] == h, "init_"+quantity].dropna()
         for h in hidden_dims
     ]
 
@@ -80,7 +80,7 @@ def main():
 
     parser.add_argument("--output",type=str,default=None,help="Optional path to save the figure.")
 
-    parser.add_argument("--quantity",type=str, default='rank_full',choices=['rank_full','n_distinct','pattern_rank'],help='which quantity to plot the histogramm')
+    parser.add_argument("--quantity",type=str, default='rank_full',choices=['rank_full','num_distinct_pat','pattern_rank','rank_rho','rank_rest'],help='which quantity to plot the histogramm')
 
     parser.add_argument("--rank_method",type=str,default=None, help='rank_method used to generate the csv, if none infered from input path')
     args = parser.parse_args()
@@ -88,7 +88,7 @@ def main():
     df = _read_df(args.input)
     rank_method=(args.dataframe_path.split('__')[-1]).split('.')[0] if args.rank_method is None else args.rank_method
     suffix='' if rank_method=='float64' else rank_method
-    required_columns = {"hidden_dim", args.quantity+suffix, "init"+args.quantity+suffix,}
+    required_columns = {"hidden_dim", args.quantity+suffix, "init_"+args.quantity+suffix,}
     
     missing = required_columns - set(df.columns)
 
@@ -97,6 +97,8 @@ def main():
     suffix='' if args.rank_method=='float64' else args.rank_method
 
     x_labels={'rank_full'+suffix: rf"$\mathrm{{rank}}\mathbf{{D}}f(\theta,X)$",
+              'rank_rho'+suffix: rf"$\mathrm{{rank}}J_{{\theta_f}}$",
+              'rank_rest'+suffix: rf"$\mathrm{{rank}}J_{{rest}}$",
             'pattern_rank'+suffix:rf"$\mathrm{{rank}}(D)$",
             'num_distinct_pat'+suffix:rf"$|\mathcal{{A}}(\theta,X)|$"}
 

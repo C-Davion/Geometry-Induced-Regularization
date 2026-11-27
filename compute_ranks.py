@@ -484,11 +484,11 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
             net = build_network(row[weights_col], device=device)
             pattern_rank,n_distinct=pattern_stats(net,X_train)
             if not diagnostic:
-                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True,common_tol=False)["ranks"]
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True,common_tol=True)["ranks"]
                 res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
                 print('is computing initial', compute_initial,res)
             else: #for diagnostic the thresolds, so we also output the jacobian
-                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=True,eval_mode=True,common_tol=False) #need common cutoff
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=True,eval_mode=True,common_tol=True) #need common cutoff
                 rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX, same_rtol=rtol, show=True,title=run_dir.name)
                 res=res["ranks"]
                 res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)

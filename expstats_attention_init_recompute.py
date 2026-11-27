@@ -174,7 +174,7 @@ def main():
 
     parser.add_argument("--show_min_max",action=argparse.BooleanOptionalAction,default=True, help='also plot the curves of min and max values')
 
-    parser.add_argument("--suptitle",type=str,default=r'Quantities as a function of $n_1',help='suptitle for the plot')
+    parser.add_argument("--suptitle",type=str,default=r'Quantities as a function of $n_1$',help='suptitle for the plot')
 
     args = parser.parse_args()
    
