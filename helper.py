@@ -423,8 +423,17 @@ def compute_upper(output_dim, seq_len, embed_dim, pattern_count, rho,upper_mode,
     return output_dim * (seq_len * embed_dim + 1) * pattern_count + min(n_rho_params,X_train.shape[0]) if upper_mode=="n_distinct" else \
         output_dim * (2*(seq_len * embed_dim + 1) * pattern_count+1) + min(n_rho_params,X_train.shape[0])
 
-def rank_spectra(J, layout, rho_prefix="rho.", window=8, save=None, show=True):
+
+# ── Use to plot the singualr values of the jacobian and partial jacobian in log_scale ────────────────────────────
+
+
+def rank_spectra(J, layout, rho_prefix="rho.", window=8, same_rtol=1e-10, keep=110,
+                 save=None, show=True,title=None):
+    if J is None:
+        raise ValueError("J is None: call jacobian(...) without return_jacobian=False.")
     M = J.detach().cpu().numpy() if isinstance(J, torch.Tensor) else np.asarray(J)
+    if M.ndim != 2:
+        raise ValueError(f"J must be a 2-D matrix (rows x parameters), got shape {M.shape}.")
  
     rho_idx = np.concatenate([np.arange(a, b) for k, (a, b) in layout.items() if k.startswith(rho_prefix)]
                              or [np.empty(0, dtype=int)])
@@ -435,45 +444,145 @@ def rank_spectra(J, layout, rho_prefix="rho.", window=8, save=None, show=True):
     if rest_idx.size:
         subs["rest"] = M[:, rest_idx]
  
-    sv = {k: np.linalg.svd(A, compute_uv=False) for k, A in subs.items()}
+    # ---- SVD (with singular vectors only if the truncation test is requested) -------------
+    sv, svd_uv = {}, {}
+    for k, A in subs.items():
+        if keep is None:
+            sv[k] = np.linalg.svd(A, compute_uv=False)
+        else:
+            U, s, Vt = np.linalg.svd(A, full_matrices=False)
+            sv[k], svd_uv[k] = s, (U, Vt)
     eps = np.finfo(M.dtype).eps
-    tol_common = max(M.shape) * eps * sv["full"][0]                    # absolute value
-    tol_own = {k: max(A.shape) * eps * sv[k][0] for k, A in subs.items()}  # absolute values
-    rank_own = {k: int((sv[k] > tol_own[k]).sum()) for k in subs}
-    rank_common = {k: int((sv[k] > tol_common).sum()) for k in subs}
+    cutoff_common = max(M.shape) * eps * sv["full"][0]                         # absolute value
+    cutoff_own = {k: max(A.shape) * eps * sv[k][0] for k, A in subs.items()}   # absolute values
  
-    print(f"{'':5s} {'own-tol rank':>13s} {'common-tol rank':>16s} {'sigma_max':>11s} {'own tol':>10s}")
-    for k in subs:
-        print(f"{k:5s} {rank_own[k]:13d} {rank_common[k]:16d} {sv[k][0]:11.2e} {tol_own[k]:10.2e}")
-    print(f"common tolerance = {tol_common:.2e}")
+    rank_own = {k: int((sv[k] > cutoff_own[k]).sum()) for k in subs}
+    rank_common = {k: int((sv[k] > cutoff_common).sum()) for k in subs}
+    ranks_of = {k: [rank_own[k], rank_common[k]] for k in subs}   # all ranks of k (for the print windows)
  
-    # zoom window derived from the ranks (not hard-coded)
-    r_all = list(rank_own.values()) + list(rank_common.values())
+    # ---- table of ranks -----------------------------------------------------------------
+    if same_rtol:
+        cutoff_same_rtol_common = sv["full"][0] * same_rtol
+        cutoff_same_rtol = {k: sv[k][0] * same_rtol for k in subs}
+        rank_same_rtol = {k: int((sv[k] > cutoff_same_rtol[k]).sum()) for k in subs}
+        rank_same_rtol_common = {k: int((sv[k] > cutoff_same_rtol_common).sum()) for k in subs}
+        for k in subs:
+            ranks_of[k] += [rank_same_rtol[k], rank_same_rtol_common[k]]
+        print(f"{'':5s} {'own':>6s} {'common':>7s} {'same-rtol':>10s} {'same-rtol-common':>17s} "
+              f"{'sigma_max':>11s} {'own cutoff':>11s} {'same-rtol cutoff':>17s}")
+        for k in subs:
+            print(f"{k:5s} {rank_own[k]:6d} {rank_common[k]:7d} {rank_same_rtol[k]:10d} "
+                  f"{rank_same_rtol_common[k]:17d} {sv[k][0]:11.2e} {cutoff_own[k]:11.2e} "
+                  f"{cutoff_same_rtol[k]:17.2e}")
+    else:
+        print(f"{'':5s} {'own':>6s} {'common':>7s} {'sigma_max':>11s} {'own cutoff':>11s}")
+        for k in subs:
+            print(f"{k:5s} {rank_own[k]:6d} {rank_common[k]:7d} {sv[k][0]:11.2e} {cutoff_own[k]:11.2e}")
+    print(f"common cutoff = {cutoff_common:.2e}")
+    if same_rtol:
+        print(f"common cutoff, same rtol = {cutoff_same_rtol_common:.2e}")
+ 
+    # ---- truncation, rebuild, re-SVD ----------------------------------------------------------
+    sv_keep, sv_rebuilt, keep_err, rebuild_stats = {}, {}, {}, {}
+    if keep is not None:
+        keep = int(keep)
+        for k, A in subs.items():
+            U, Vt = svd_uv.pop(k)
+            s = sv[k]
+            sk = s.copy()
+            sk[keep:] = 0.0                                              # truncated spectrum
+            sv_keep[k] = sk
+            keep_err[k] = {
+                "spectral": float(s[keep] / s[0]) if keep < len(s) and s[0] > 0 else 0.0,
+                "frobenius": float(np.sqrt((s[keep:] ** 2).sum() / (s ** 2).sum())),
+            }
+            A_keep = (U[:, :keep] * s[:keep]) @ Vt[:keep]                # M_keep = U diag(s_keep) V^T
+            A_full = (U * s) @ Vt                                        # untruncated reconstruction
+            s2 = np.linalg.svd(A_keep, compute_uv=False)                 # re-decompose the rebuilt matrix
+            sv_rebuilt[k] = s2
+            tail = s2[keep:]
+            rebuild_stats[k] = {
+                "recon_err": float(np.linalg.norm(A - A_full) / np.linalg.norm(A)),   # ||M - U S V^T||_F / ||M||_F
+                "topk_dev": float(np.abs(s2[:keep] - s[:keep]).max() / s[0]) if keep > 0 else 0.0,
+                "tail_max": float(tail.max()) if tail.size else 0.0,
+                "tail_median": float(np.median(tail)) if tail.size else 0.0,
+                "tail_max_rel": float(tail.max() / s[0]) if tail.size else 0.0,
+            }
+            del U, Vt, A_keep, A_full
+ 
+        print(f"\ntruncation to the {keep} largest singular values (others set to 0):")
+        print(f"{'':5s} {'spectral err':>13s} {'Frobenius err':>14s}")
+        for k in subs:
+            print(f"{k:5s} {keep_err[k]['spectral']:13.2e} {keep_err[k]['frobenius']:14.2e}")
+        print(f"\nstability test: rebuild M_keep = U diag(s_keep) V^T, then SVD again:")
+        print(f"{'':5s} {'recon err':>10s} {'top-k dev/smax':>15s} {'tail max':>10s} {'tail median':>12s} {'tail max/smax':>14s}")
+        for k in subs:
+            st = rebuild_stats[k]
+            print(f"{k:5s} {st['recon_err']:10.2e} {st['topk_dev']:15.2e} {st['tail_max']:10.2e} "
+                  f"{st['tail_median']:12.2e} {st['tail_max_rel']:14.2e}")
+        print("   (recon err: full U S V^T vs M; top-k dev: max |s'_i - s_i| over the kept values;"
+              " tail: s'[keep:], exactly 0 in exact arithmetic = numerical noise floor)")
+ 
+        pos = np.concatenate([s[s > 0] for s in sv.values()] + [s[s > 0] for s in sv_rebuilt.values()]
+                             or [np.array([1e-300])])
+        floor = 0.1 * pos.min()   # exact zeros cannot be drawn on a log axis: drawn at this floor
+ 
+    # ---- zoom window derived from the ranks (not hard-coded) ------------------------------
+    r_all = [r for rs in ranks_of.values() for r in rs] + ([keep] if keep is not None else [])
     lo = max(0, min(r_all) - window)
     hi = min(max(len(s) for s in sv.values()), max(r_all) + window)  # shorter spectra are cut by slicing
-    for k in subs:  # printed window: around this matrix's own ranks
-        a = max(0, min(rank_own[k], rank_common[k]) - window)
-        b = max(rank_own[k], rank_common[k]) + window
-        print(f"{k:5s} s[{a}:{b}] =", np.array2string(sv[k][a:b], precision=2))
+    for k in subs:  # printed windows: around each of this matrix's ranks (overlapping windows merged)
+        intervals = []
+        for r in sorted(set(ranks_of[k] + ([keep] if keep is not None else []))):
+            a, b = max(0, r - window), r + window
+            if intervals and a <= intervals[-1][1]:
+                intervals[-1][1] = max(intervals[-1][1], b)
+            else:
+                intervals.append([a, b])
+        for a, b in intervals:
+            print(f"{k:5s} s[{a}:{b}] =", np.array2string(sv[k][a:b], precision=2))
  
+    # ---- plot ---------------------------------------------------------------------------
     colors = {"full": "tab:blue", "rho": "tab:orange", "rest": "tab:green"}
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     for ax, zoom in zip(axes, (False, True)):
         for k, s in sv.items():
             idx = np.arange(len(s))
             sl = slice(lo, hi) if zoom else slice(None)
-            ax.semilogy(idx[sl], s[sl], ".-" if zoom else "-", color=colors[k],
-                        label=f"{k} (own-tol rank {rank_own[k]})")
-            ax.axhline(tol_own[k], color=colors[k], ls="--", lw=1)
-        ax.axhline(tol_common, color="k", ls=":", lw=1.5, label="common tolerance")
+            ax.semilogy(idx[sl], s[sl], ".-" if zoom else "-", color=colors[k], lw=1,
+                        label=f"{k} original (own-cutoff rank {rank_own[k]})")
+            if keep is not None:
+                sk = np.where(sv_keep[k] > 0, sv_keep[k], floor)
+                ax.semilogy(idx[sl], sk[sl], ":", color=colors[k], lw=2.5, alpha=0.9,
+                            label=f"{k} truncated, keep={keep} (zeros drawn at floor)")
+                ax.semilogy(idx[sl], sv_rebuilt[k][sl], "--", color=colors[k], lw=1.4,
+                            marker="x", ms=3.5,
+                            label=f"{k} rebuilt from truncated SVD, re-decomposed")
+            ax.axhline(cutoff_own[k], color=colors[k], ls="-.", lw=0.8, alpha=0.5)
+            if same_rtol:
+                ax.axhline(cutoff_same_rtol[k], color=colors[k], ls=(0, (3, 1, 1, 1, 1, 1)), lw=0.8, alpha=0.5)
+        if keep is not None:
+            ax.axvline(keep - 0.5, color="k", ls=":", lw=1, label=f"keep = {keep}")
         ax.set_xlabel("index k"); ax.set_ylabel(r"$\sigma_k$")
         ax.set_title("zoom around the ranks" if zoom else "full spectrum")
         ax.grid(alpha=0.3, which="both")
-    axes[0].legend(fontsize=8)
-    fig.suptitle("Singular values (solid), own thresholds (dashed), common threshold (dotted)", fontsize=10)
+    axes[0].legend(fontsize=6.5, loc="upper right")
+    line1 = "solid: original"
+    if keep is not None:
+        line1 += "; dotted thick: truncated (exact zeros); dashed with x: rebuilt matrix, SVD recomputed"
+    line2 = "thin dash-dot: own cutoff" + ("; thin dash-dot-dot: same-rtol cutoff" if same_rtol else "")
+    fig.suptitle(f"Singular values ({title}\n{line1})\n{line2}", fontsize=9)
     fig.tight_layout()
     if save:
         fig.savefig(save, dpi=150)
     if show:
         plt.show()
-    return {"rank_own": rank_own, "rank_common": rank_common, "tol_own": tol_own, "tol_common": tol_common}
+ 
+    out = {"rank_own": rank_own, "rank_common": rank_common,
+           "cutoff_own": cutoff_own, "cutoff_common": cutoff_common}
+    if same_rtol:
+        out.update(rank_same_rtol=rank_same_rtol, rank_same_rtol_common=rank_same_rtol_common,
+                   cutoff_same_rtol=cutoff_same_rtol, cutoff_same_rtol_common=cutoff_same_rtol_common)
+    if keep is not None:
+        out.update(keep_err=keep_err, rebuild_stats=rebuild_stats, sv=sv, sv_rebuilt=sv_rebuilt)
+    return out

@@ -1,6 +1,16 @@
 """
-Jacobian of  theta -> model(theta, X)  (R^p -> R^n)  at the parameters of model_weights.pt,
+Chehck the Jacobian of  theta -> model(theta, X)  (R^p -> R^n)  at the parameters of model_weights.pt, located in --folder, training on the dataset --dataset_path.
 plus a sanity check on a randomly drawn sample x of X.
+
+The check is: sample x in X, then plot for the corresponding Jacobian row : grad(f)
+for t in an intervalle small enough around zero: [- --t_max, --t_max]
+
+t-> model(theta+t*grad(f),X)
+
+t-> model(theta,X)+t*||grad(f)||^2, which should be tangeant to the function above at t=0
+
+computes and saves erros into a csv --out
+
 
 CLI example:
     python jacobian_study.py --folder path/to/run --keys full --device cuda --show

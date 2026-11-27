@@ -63,7 +63,7 @@ _METHOD_SPECS = {
     # method:        (dtype,          rtol,       stable)
     "float64":       (torch.float64,  None,       False), #n_1=10 rtol=2e-13,n_1=100 rtol=2e-11
     "stable_rank":   (torch.float64,  None,       True),
-    "float641e-10":  (torch.float64, 1e-10,      False), #use this one maybe to 1e-11
+    "float641e-12":  (torch.float64, 1e-12,      False), #use this one maybe to 1e-11
     "float641e-6":   (torch.float64,1e-6,        False)
 } 
 Keys = Union[str, Sequence[str]]
@@ -96,7 +96,7 @@ Both at once:
         res = jacobian(net, X, keys=["W1", "b1"], rank_method="float64", device="cuda")
         res["J"], res["ranks"], res["layout"]
 """
-def jacobian(
+def old_jacobian(
     model: torch.nn.Module,
     X: torch.Tensor,
     keys: Keys = "full",
@@ -142,6 +142,10 @@ def jacobian(
     copy_model      : True -> work on a deep copy, `model` is left untouched.
                       False -> `model` is modified in place (eval mode, dtype/device).
     eval_mode       : call model.eval() (no dropout, BatchNorm uses running statistics).
+
+    common_tol      : Due to the difference in size, sometimes the rank of the sub-matrix can exceed the one of the full matrix
+                    common_tol= True thresolds all singular values of all matrix with simga_max(A)*max(A.shape)*eps with A the biggest matrix
+                    'full'
     """
     # ---- 0. rank spec / dtype --------------------------------------------------------------
     rtol, stable = None, False
@@ -227,13 +231,189 @@ def jacobian(
                 return float((s ** 2).sum() / s[0] ** 2)
             tol = rtol if rtol is not None else max(A.shape) * np.finfo(s.dtype).eps
             return int((s > tol * s[0]).sum())
-
         rho = [M[:, rho_idx]] if rho_idx.size else []
         rest = [M[:, rest_idx]] if rest_idx.size else []
         ranks = {"rank_full": rank_of(rho + rest), "rank_rho": rank_of(rho), "rank_rest": rank_of(rest)}
         del M
 
     return {"J": J if return_jacobian else None, "layout": layout, "ranks": ranks}
+
+
+
+def ranks_from_matrix(M, layout, rho_prefix=RHO_PREFIX, rtol=None, stable=False, common_tol=False):
+    """
+    Ranks of J_full = M, J_rho (columns of the keys starting with rho_prefix) and J_rest (the other
+    columns), from ONE SVD per matrix. Pure numpy (no torch). Returns (ranks, svals):
+        ranks = {"rank_full", "rank_rho", "rank_rest"}   svals = {"full": s, "rho": s, "rest": s}
+ 
+    Threshold used for a matrix A with singular values s:
+        common_tol=False : tol_A = t(A) * s[0]            (each matrix has its own threshold)
+        common_tol=True  : tol   = t(M) * sigma_max(M)    (ONE absolute threshold, from the full matrix)
+      with t(A) = rtol if rtol is not None else max(A.shape) * eps(dtype).
+    With one common threshold, rank_rho <= rank_full and rank_rest <= rank_full always hold.
+    stable=True returns the stable rank ||A||_F^2 / ||A||_2^2 instead (no threshold, common_tol ignored).
+    """
+    empty = np.empty(0, dtype=int)
+    rho_idx = np.concatenate([np.arange(a, b) for k, (a, b) in layout.items() if k.startswith(rho_prefix)] or [empty])
+    rest_idx = np.concatenate([np.arange(a, b) for k, (a, b) in layout.items() if not k.startswith(rho_prefix)] or [empty])
+    blocks = {"full": M}
+    if rho_idx.size:
+        blocks["rho"] = M[:, rho_idx]
+    if rest_idx.size:
+        blocks["rest"] = M[:, rest_idx]
+    svals = {k: np.linalg.svd(A, compute_uv=False) for k, A in blocks.items()}   # one SVD per matrix
+ 
+    def t_of(shape, dtype):
+        return rtol if rtol is not None else max(shape) * np.finfo(dtype).eps
+ 
+    def rank_of(name, abs_tol=None):
+        if name not in blocks:
+            return 0.0 if stable else 0
+        s = svals[name]
+        if s.size == 0 or s[0] == 0:
+            return 0.0 if stable else 0
+        if stable:
+            return float((s ** 2).sum() / s[0] ** 2)
+        if abs_tol is None:
+            abs_tol = t_of(blocks[name].shape, s.dtype) * s[0]
+        return int((s > abs_tol).sum())
+ 
+    abs_tol = None
+    if common_tol and not stable:
+        s_full = svals["full"]
+        abs_tol = t_of(M.shape, s_full.dtype) * (s_full[0] if s_full.size else 0.0)
+    ranks = {"rank_full": rank_of("full", abs_tol), "rank_rho": rank_of("rho", abs_tol),
+             "rank_rest": rank_of("rest", abs_tol)}
+    return ranks, svals
+ 
+ 
+def jacobian(
+    model: torch.nn.Module,
+    X: torch.Tensor,
+    keys: Keys = "full",
+    *,
+    jac_method: str = "batched",
+    chunk_size: Optional[int] = None,
+    dtype: Optional[torch.dtype] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    rank_method: Optional[str] = None,
+    rho_prefix: str = RHO_PREFIX,
+    return_jacobian: bool = True,
+    copy_model: bool = True,
+    eval_mode: bool = True,
+    common_tol: bool = False,
+) -> dict:
+    """
+    Stacked Jacobian J[(i, o), j] = d f(theta, X)_{i,o} / d theta_j of theta -> f(theta, X),
+    restricted to the parameters `keys`, and (optionally) its ranks.
+ 
+    Arguments
+    ---------
+    model, X        : the network and the batched input (N, ...). The model may return
+                      output_dim >= 1 values per sample; rows are ordered sample-major
+                      (row = i * output_dim + o), as out.flatten() would give.
+    keys            : "full" (all parameters) or names of *parameters* in the state_dict
+                      (buffers are rejected). Columns of J follow the order of `keys`, each
+                      tensor flattened row-major; see res["layout"].
+    jac_method      : "batched"    -> jacrev of the batched map (exact, valid even if samples
+                                      interact; ~N backward passes through the whole batch).
+                      "per_sample" -> vmap(jacrev) of the single-sample map (O(N); equals the
+                                      batched Jacobian only if samples do not interact).
+    chunk_size      : forwarded to jacrev / vmap to limit memory.
+    dtype, device   : cast the (copied) model and X. dtype=None keeps the current one, unless
+                      `rank_method` is given, in which case its spec's dtype is used.
+                      The torch default dtype is set to `dtype` during the computation
+                      (needed e.g. when a forward builds torch.ones(seq_len) in the default dtype).
+                      X is cast only if it is floating-point.
+    rank_method     : None -> no rank computation. Otherwise a key of _METHOD_SPECS giving
+                      (dtype, rtol, stable):  rtol=None -> tolerance max(m, n)*eps*sigma_max,
+                      rtol=r -> singular values <= r*sigma_max are zero, stable=True -> stable
+                      rank ||M||_F^2 / ||M||_2^2 (a float).
+    rho_prefix      : parameters whose name starts with it form J_rho; the others J_rest.
+    return_jacobian : False -> res["J"] is None (saves memory when only the ranks matter).
+    copy_model      : True -> work on a deep copy, `model` is left untouched.
+                      False -> `model` is modified in place (eval mode, dtype/device).
+    eval_mode       : call model.eval() (no dropout, BatchNorm uses running statistics).
+    common_tol      : False -> each matrix (full / rho / rest) uses its OWN threshold (see ranks_from_matrix);
+                      this can give rank_rho > rank_full.
+                      True  -> ONE absolute threshold computed from the full matrix, applied to all three;
+                      guarantees rank_rho <= rank_full and rank_rest <= rank_full. Uses rtol if the
+                      rank_method gives one, else max(m, n) * eps. Ignored for the stable rank.
+    Returns {"J", "layout", "ranks", "svals"}; "svals" = singular values of full / rho / rest (or None),
+    so that other tolerances can be tested without recomputing any SVD.
+    """
+    # ---- 0. rank spec / dtype --------------------------------------------------------------
+    rtol, stable = None, False
+    if rank_method is not None:
+        if rank_method not in _METHOD_SPECS:
+            raise ValueError(f"rank_method must be one of {list(_METHOD_SPECS)}, got {rank_method!r}")
+        spec_dtype, rtol, stable = _METHOD_SPECS[rank_method]
+        dtype = dtype if dtype is not None else spec_dtype
+ 
+    # ---- 1. working copy of model and data -----------------------------------------------
+    if copy_model:
+        model = copy.deepcopy(model)
+    if device is not None or dtype is not None:
+        model = model.to(device=device, dtype=dtype)
+    if eval_mode:
+        model.eval()
+    X = X.to(next(model.parameters()).device)
+    if dtype is not None and X.is_floating_point():
+        X = X.to(dtype)
+ 
+    # ---- 2. keys and column layout ---------------------------------------------------------
+    named = dict(model.named_parameters())
+    if keys is None or keys == "full" or list(keys) == ["full"]:
+        keys = list(named)
+    else:
+        keys = [keys] if isinstance(keys, str) else list(keys)
+        for k in keys:
+            if k not in named:
+                if k in model.state_dict():
+                    raise ValueError(f"'{k}' is a buffer, not a trainable parameter.")
+                raise KeyError(f"'{k}' not found. Available parameters: {list(named)}")
+    layout, offset = {}, 0
+    for k in keys:
+        layout[k] = (offset, offset + named[k].numel())
+        offset += named[k].numel()
+ 
+    # ---- 3. the Jacobian -------------------------------------------------------------------
+    sel = {k: named[k].detach() for k in keys}
+    n = X.shape[0]
+    old_default = torch.get_default_dtype()
+    if dtype is not None:
+        torch.set_default_dtype(dtype)
+    try:
+        if jac_method == "batched":
+            def f_batch(p):
+                out = functional_call(model, p, (X,))
+                if out.numel() % n != 0:
+                    raise ValueError(f"Output has {out.numel()} entries, not a multiple of N={n}.")
+                return out.reshape(-1)                      # (N * output_dim,)
+ 
+            jac = jacrev(f_batch, chunk_size=chunk_size)(sel)       # key -> (N*od, *shape)
+        elif jac_method == "per_sample":
+            def f_single(p, x):
+                return functional_call(model, p, (x.unsqueeze(0),)).reshape(-1)   # (od,)
+ 
+            jac = vmap(jacrev(f_single), in_dims=(None, 0), chunk_size=chunk_size)(sel)  # key -> (N, od, *shape)
+        else:
+            raise ValueError("jac_method must be 'batched' or 'per_sample'")
+    finally:
+        torch.set_default_dtype(old_default)
+ 
+    J = torch.cat([jac[k].reshape(-1, named[k].numel()) for k in keys], dim=1)  # (N*od, p_sel)
+    del jac
+ 
+    # ---- 4. ranks --------------------------------------------------------------------------
+    ranks, svals = None, None
+    if rank_method is not None:
+        M = J.detach().cpu().numpy()
+        ranks, svals = ranks_from_matrix(M, layout, rho_prefix, rtol, stable, common_tol)
+        del M
+ 
+    return {"J": J if return_jacobian else None, "layout": layout, "ranks": ranks, "svals": svals}
+ 
 
 # ============================================================
 # Training inputs
@@ -280,12 +460,16 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
                   (default_dataset_path is used if the key is absent)
     compute_initial : if True, add prefix for the names so to distinguish between the initial_weights and the weights at critical point.
     device      : "cpu" by default (a float64 Jacobian of this size is cheap on CPU)
+    diagnositc : if true calls the rank_spectra function in helper that plots the svd, truncated svd and rebuild and re svd on log scale, use to find 
+    the noise thresolds
+    
     """
     if rank_method not in _METHOD_SPECS:
         raise ValueError(f"method must be one of {list(_METHOD_SPECS)}, got {rank_method!r}")
     suffix = "" if rank_method == "float64" else f"_{rank_method}"
     prefix="" if not compute_initial else "init_"
     stable = _METHOD_SPECS[rank_method][2]
+    rtol=_METHOD_SPECS[rank_method][1]
     if compute_initial:
         assert weights_col=="init_weight_path", "Mismatched between compute_initial and weight_col. This will compute the ranks at critical point but will be saved as init_."
 
@@ -300,12 +484,12 @@ def add_jacobian_ranks(df, folder_col="run_folder", base_dir_col='base_dir', wei
             net = build_network(row[weights_col], device=device)
             pattern_rank,n_distinct=pattern_stats(net,X_train)
             if not diagnostic:
-                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True)["ranks"]
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=False,eval_mode=True,common_tol=False)["ranks"]
                 res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
                 print('is computing initial', compute_initial,res)
             else: #for diagnostic the thresolds, so we also output the jacobian
-                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=True,eval_mode=True)
-                rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX, show=True)
+                res=jacobian(net,X_train,rank_method=rank_method,device=device,return_jacobian=True,eval_mode=True,common_tol=False) #need common cutoff
+                rank_spectra(res["J"], res["layout"], rho_prefix=RHO_PREFIX, same_rtol=rtol, show=True,title=run_dir.name)
                 res=res["ranks"]
                 res.update(num_distinct_pat=n_distinct,pattern_rank=pattern_rank,n_train=int(X_train.shape[0]), rank_error=None)
                 print('is computing initial', compute_initial,res)
